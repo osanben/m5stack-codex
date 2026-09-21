@@ -30,7 +30,8 @@ ACTIVE_IDLE_SECONDS = 15 * 60
 APP_SERVER_TIMEOUT_SECONDS = 15
 # Keep completed tasks visible long enough to use the dashboard as a recent
 # activity display, not only as a transient completion notification.
-COMPLETION_DISPLAY_SECONDS = 30 * 60
+COMPLETION_DISPLAY_SECONDS = 72 * 60 * 60
+INTERRUPTION_DISPLAY_SECONDS = 30 * 60
 # Lifecycle events are local files, so this is the maximum normal delay before
 # a task transition is sent to a connected display.
 LIVE_PUSH_SECONDS = 0.25
@@ -178,7 +179,7 @@ class TaskTracker:
         if isinstance(saved, dict) and isinstance(saved.get("turns"), dict):
             self.turns = {str(turn_id): dict(data) for turn_id, data in saved["turns"].items()
                           if isinstance(data, dict) and data.get("status") in ("active", "completed", "interrupted")}
-            # A restart must not erase the requested 30-minute green state.
+            # A restart must not erase the requested 72-hour green state.
             # Restore the newest still-visible completion, but mark it read so
             # it does not generate another macOS notification on startup.
             restored: dict[str, tuple[int, str, dict[str, Any]]] = {}
@@ -200,7 +201,7 @@ class TaskTracker:
 
     def update(self) -> tuple[list[dict[str, str]], list[dict[str, str]], str | None]:
         root = Path.home() / ".codex" / "sessions"
-        cutoff = time.time() - 2 * 86400
+        cutoff = time.time() - max(2 * 86400, COMPLETION_DISPLAY_SECONDS)
         changed = False
         for path in root.rglob("*.jsonl"):
             try:
@@ -354,7 +355,7 @@ class TaskTracker:
         recent_completed = sorted(self.recent_completed.values(),
                                   key=lambda item: int(item.get("completed_at") or 0), reverse=True)
         stopped = [data for data in latest.values() if data["status"] == "interrupted"
-                   and now - int(data.get("completed_at") or 0) < COMPLETION_DISPLAY_SECONDS]
+                   and now - int(data.get("completed_at") or 0) < INTERRUPTION_DISPLAY_SECONDS]
         stopped_threads = {data.get("thread_id") for data in stopped}
         recent_completed = stopped + [data for data in recent_completed if data.get("thread_id") not in stopped_threads]
         return active, recent_completed, self.notice if time.time() < self.notice_until else None
