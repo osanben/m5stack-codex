@@ -124,6 +124,42 @@ CACHE_LOCK = threading.Lock()
 TASK_LOCK = threading.Lock()
 
 
+class ReconnectTracker:
+    """Read actual retry/output events, never arbitrary tool or message text."""
+    def __init__(self) -> None:
+        self.cursor: int | None = None
+        self.reconnecting: dict[str, str] = {}
+
+    def consume(self, target: str, thread_id: str, body: str) -> None:
+        turn = re.search(r'\bturn_id=([0-9a-f-]{36})', body)
+        if not turn or not thread_id:
+            return
+        if target == "codex_core::responses_retry" and re.search(r': stream disconnected - retrying sampling request \(', body):
+            self.reconnecting[thread_id] = turn.group(1)
+        elif target == "codex_core::stream_events_utils" and re.search(r': Output item item_type="[a-z_]+" item_id="[^"\n]+"$', body):
+            self.reconnecting.pop(thread_id, None)
+
+    def update(self) -> None:
+        database = Path.home() / ".codex" / "logs_2.sqlite"
+        try:
+            with sqlite3.connect(f"file:{database}?mode=ro", uri=True, timeout=0.05) as db:
+                maximum = db.execute("SELECT COALESCE(MAX(id),0) FROM logs").fetchone()[0]
+                if self.cursor is None or maximum < self.cursor:
+                    self.cursor = max(0, maximum - 20000)
+                    self.reconnecting.clear()
+                rows = db.execute("SELECT id,target,thread_id,feedback_log_body FROM logs "
+                                  "WHERE id>? AND id<=? AND target IN (?,?) ORDER BY id LIMIT 2000",
+                                  (self.cursor, maximum, "codex_core::responses_retry", "codex_core::stream_events_utils")).fetchall()
+                for _, target, thread_id, body in rows:
+                    self.consume(target, thread_id, body or "")
+                self.cursor = rows[-1][0] if len(rows) == 2000 else maximum
+        except sqlite3.Error:
+            pass
+
+
+RECONNECT_TRACKER = ReconnectTracker()
+
+
 class TaskTracker:
     """Tail Codex rollout events so active/completed turns are not guessed."""
     def __init__(self) -> None:
@@ -366,6 +402,7 @@ def local_thread_details(thread_id: str) -> tuple[str | None, int, str]:
 def live_task_status() -> dict[str, Any]:
     """Build task state solely from local lifecycle events and thread metadata."""
     cli_active, just_completed, completion = TRACKER.update()
+    RECONNECT_TRACKER.update()
     task_items = []
     seen_threads = set()
     task_index_by_thread: dict[str, int] = {}
@@ -389,7 +426,9 @@ def live_task_status() -> dict[str, Any]:
                 task_activity[index] = activity
             task_index_by_thread[thread_id] = index
             continue
-        task_items.append({"name": name, "tokens": tokens, "status": "WAITING" if item.get("waiting") else "ACTIVE"})
+        reconnecting = RECONNECT_TRACKER.reconnecting.get(thread_id) == item.get("turn_id")
+        task_items.append({"name": name, "tokens": tokens,
+                           "status": "WAITING" if item.get("waiting") else "RECONNECTING" if reconnecting else "ACTIVE"})
         index = len(task_items) - 1
         task_index_by_thread[thread_id] = index
         task_index_by_identity[identity] = index
@@ -499,7 +538,7 @@ def ble_task_frames(status: dict[str, Any]) -> list[bytes]:
         # The device wraps this into two lines. Keep enough context for a
         # meaningful task label while each write remains safely below MTU.
         name = str(task.get("name") or "Task").replace(";", ",").replace("=", ":").replace("\n", " ")[:18]
-        state = {"COMPLETED": "DONE", "WAITING": "WAIT", "INTERRUPTED": "STOP"}.get(task.get("status"), "RUN")
+        state = {"COMPLETED": "DONE", "WAITING": "WAIT", "RECONNECTING": "WAIT", "INTERRUPTED": "STOP"}.get(task.get("status"), "RUN")
         frames.append(f"I={index};N={name};V={int(task.get('tokens') or 0)};X={state}".encode())
     return frames
 
