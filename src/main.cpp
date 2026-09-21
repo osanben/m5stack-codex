@@ -23,6 +23,7 @@ String bridgeUrl;
 String configuredSsid;
 String lastError;
 uint32_t nextPoll = 0;
+uint32_t lastDrawAt = 0;
 bool wasTouching = false;
 volatile bool bleConnected = false;
 volatile uint32_t lastBleAt = 0;
@@ -248,6 +249,16 @@ void drawTaskBubble(int cx, int cy, int radius, const Dashboard::TaskBubble& tas
   d.fillCircle(cx, cy, radius, 0x0842);
   d.drawCircle(cx, cy, radius + 1, color);
   d.drawCircle(cx, cy, radius - 3, 0x2945);
+  if (task.status == "RUN") {
+    // Animate locally; no extra BLE packets are needed. One revolution / 2s.
+    float angle = (millis() % 2000) * (2.0f * PI / 2000.0f) - PI / 2;
+    for (int i = 2; i >= 0; --i) {
+      float a = angle - i * 0.22f;
+      int x = cx + lroundf(cosf(a) * (radius - 1));
+      int y = cy + lroundf(sinf(a) * (radius - 1));
+      d.fillCircle(x, y, i == 0 ? 3 : 2, i == 0 ? TFT_WHITE : color);
+    }
+  }
   screen.setTextSize(2);
   int tokenX = max(0, cx - screen.textWidth(compactNumber(task.tokens)) / 2);
   text(tokenX, cy - 17, compactNumber(task.tokens), color, 2);
@@ -389,12 +400,18 @@ void loop() {
     lastError = "Setup AP enabled";
   }
   wasTouching = touching;
-  if (dashboardDirty || millis() > nextPoll) {
+  bool running = false;
+  for (int i = 0; i < min(4, dashboard.bubbleCount); ++i) {
+    if (dashboard.bubbles[i].status == "RUN") running = true;
+  }
+  bool animate = running && millis() - lastDrawAt >= 80;
+  if (dashboardDirty || millis() > nextPoll || animate) {
     bool shouldPoll = millis() > nextPoll;
-    nextPoll = millis() + POLL_MS;
+    if (shouldPoll) nextPoll = millis() + POLL_MS;
     // Wi-Fi remains an optional fallback; BLE does not require any setup.
     if (shouldPoll && (!lastBleAt || millis() - lastBleAt > 10000)) fetchDashboard();
     draw();
+    lastDrawAt = millis();
     dashboardDirty = false;
   }
   delay(20);
