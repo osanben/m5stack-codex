@@ -265,13 +265,13 @@ void drawTaskBubble(int cx, int cy, int radius, const Dashboard::TaskBubble& tas
   String title = task.name.length() ? task.name : "Codex task";
   // BLE names are UTF-8. The default bitmap font has no Chinese glyphs;
   // select the bundled Simplified Chinese font for both measuring and drawing.
-  d.setFont(&fonts::efontCN_12);
+  d.setFont(&fonts::efontCN_14);
   d.setTextSize(1);
   size_t offset = 0;
   String firstLine = nextBubbleLine(title, offset, radius * 2 - 8);
   String secondLine = nextBubbleLine(title, offset, radius * 2 - 8);
   bubbleText(cx, cy - 1, firstLine, TFT_WHITE);
-  bubbleText(cx, cy + 12, secondLine, TFT_WHITE);
+  bubbleText(cx, cy + 14, secondLine, TFT_WHITE);
   d.setFont(&fonts::Font0);
 }
 
