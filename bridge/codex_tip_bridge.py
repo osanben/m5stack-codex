@@ -135,7 +135,8 @@ class ReconnectTracker:
         turn = re.search(r'\bturn_id=([0-9a-f-]{36})', body)
         if not turn or not thread_id:
             return
-        if target == "codex_core::responses_retry" and re.search(r': stream disconnected - retrying sampling request \(', body):
+        if target == "codex_core::responses_retry" and re.search(
+                r': (?:stream disconnected - retrying sampling request \(|stream connection failed; waiting to retry\b)', body):
             self.reconnecting[thread_id] = turn.group(1)
         elif target == "codex_core::stream_events_utils" and re.search(r': Output item item_type="[a-z_]+" item_id="[^"\n]+"$', body):
             self.reconnecting.pop(thread_id, None)
@@ -327,7 +328,9 @@ class TaskTracker:
         for data in latest.values():
             data["waiting"] = data["turn_id"] in waiting_turns
         active = [data for data in latest.values()
-                  if data.get("waiting") or (data["status"] == "active" and now - int(data.get("last_activity") or data.get("started_at") or 0) <= ACTIVE_IDLE_SECONDS)]
+                  if data.get("waiting") or (data["status"] == "active" and (
+                      RECONNECT_TRACKER.reconnecting.get(data.get("thread_id")) == data["turn_id"] or
+                      now - int(data.get("last_activity") or data.get("started_at") or 0) <= ACTIVE_IDLE_SECONDS))]
         completed = None
         if self.ready:
             newly_completed = [data for data in self.turns.values() if data.get("status") == "completed" and not data.get("announced")]
@@ -402,8 +405,8 @@ def local_thread_details(thread_id: str) -> tuple[str | None, int, str]:
 
 def live_task_status() -> dict[str, Any]:
     """Build task state solely from local lifecycle events and thread metadata."""
-    cli_active, just_completed, completion = TRACKER.update()
     RECONNECT_TRACKER.update()
+    cli_active, just_completed, completion = TRACKER.update()
     task_items = []
     seen_threads = set()
     task_index_by_thread: dict[str, int] = {}
