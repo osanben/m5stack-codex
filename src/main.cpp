@@ -293,26 +293,19 @@ void draw() {
   d.setCursor(308 - d.textWidth(total), headerY);
   d.print(total);
 
-  text(14, 32, dashboard.quotaStale ? "QUOTA STALE" : "QUOTA", dashboard.quotaStale ? 0xFD20 : 0x75D7, 1);
-  String p = dashboard.primaryPercent < 0 ? "--" : String(dashboard.primaryPercent) + "%";
-  text(14, 43, p, TFT_WHITE, 3);
   String reset = dashboard.primaryResetMinutes >= 0 ? duration(dashboard.primaryResetMinutes) : until(dashboard.primaryReset);
-  progress(13, 76, dashboard.primaryPercent, dashboard.primaryPercent > 80 ? 0xFD20 : 0x05F6);
-  if (dashboard.secondaryPercent >= 0) {
-    text(164, 50, "LONG " + String(dashboard.secondaryPercent) + "%", 0xBDF7, 2);
-  }
 
   if (count == 0) {
-    centered(147, "NO ACTIVE TASK", 0xBDF7, 2);
+    centered(116, "NO ACTIVE TASK", 0xBDF7, 2);
   } else {
     static const int positions[4][4][2] = {
-      {{160,153},{0,0},{0,0},{0,0}},
-      {{92,153},{228,153},{0,0},{0,0}},
-      {{65,173},{160,126},{255,173},{0,0}},
-      {{88,119},{232,119},{88,187},{232,187}}
+      {{160,124},{0,0},{0,0},{0,0}},
+      {{82,124},{238,124},{0,0},{0,0}},
+      {{60,163},{160,85},{260,163},{0,0}},
+      {{88,76},{232,76},{88,173},{232,173}}
     };
-    static const int minRadius[] = {44, 36, 29, 25};
-    static const int maxRadius[] = {62, 59, 41, 31};
+    static const int minRadius[] = {52, 40, 32, 29};
+    static const int maxRadius[] = {88, 72, 52, 44};
     uint64_t maxTokens = 1;
     for (int i = 0; i < count; ++i) maxTokens = max(maxTokens, dashboard.bubbles[i].tokens);
     for (int i = 0; i < count; ++i) {
@@ -326,7 +319,7 @@ void draw() {
       drawTaskBubble(positions[count - 1][i][0], positions[count - 1][i][1], radius, dashboard.bubbles[i], color);
     }
   }
-  // Keep all secondary information on one line, reserving y=85..219 for tasks.
+  // Keep all secondary information on one line, reserving y=28..219 for tasks.
   String footer = "Life " + compactNumber(dashboard.lifetimeTokens) + "  R " + reset;
   if (dashboard.secondaryPercent >= 0) {
     String longReset = dashboard.secondaryResetMinutes >= 0 ? duration(dashboard.secondaryResetMinutes) : until(dashboard.secondaryReset);
