@@ -17,6 +17,14 @@ constexpr char AP_SSID[] = "CODEX-TIP-SETUP";
 constexpr char AP_PASSWORD[] = "codex-tip";
 constexpr char BLE_SERVICE_UUID[] = "5f6d0001-7f62-4da0-99e6-401b1de91a00";
 constexpr char BLE_STATUS_UUID[] = "5f6d0002-7f62-4da0-99e6-401b1de91a00";
+constexpr char BLE_ACTION_UUID[] = "5f6d0003-7f62-4da0-99e6-401b1de91a00";
+NimBLECharacteristic* actionCharacteristic = nullptr;
+struct BubbleHit { int x = 0; int y = 0; int radius = 0; String id; } bubbleHits[4];
+String pressedTask;
+uint32_t pressedAt = 0;
+int pressX = 0, pressY = 0;
+bool pressHandled = false;
+uint32_t hideNoticeUntil = 0;
 
 Preferences prefs;
 WebServer portal(80);
@@ -49,7 +57,7 @@ struct Dashboard {
   int recentTasks = 0;
   String task = "Waiting for Codex…";
   String event;
-  struct TaskBubble { String name; String status = "RUN"; uint64_t tokens = 0; } bubbles[4];
+  struct TaskBubble { String id; String name; String status = "RUN"; uint64_t tokens = 0; } bubbles[4];
   int bubbleCount = 0;
   int incomingBubble = -1;
   bool valid = false;
@@ -107,6 +115,7 @@ void applyBleStatus(const std::string& packet) {
       else if (key == "A") dashboard.activeTasks = value.toInt();
       else if (key == "B") dashboard.bubbleCount = constrain(value.toInt(), 0, 4);
       else if (key == "I") dashboard.incomingBubble = constrain(value.toInt(), 0, 3);
+      else if (key == "K" && dashboard.incomingBubble >= 0) dashboard.bubbles[dashboard.incomingBubble].id = value;
       else if (key == "N" && dashboard.incomingBubble >= 0) dashboard.bubbles[dashboard.incomingBubble].name = value;
       else if (key == "V" && dashboard.incomingBubble >= 0) dashboard.bubbles[dashboard.incomingBubble].tokens = strtoull(value.c_str(), nullptr, 10);
       else if (key == "X" && dashboard.incomingBubble >= 0) dashboard.bubbles[dashboard.incomingBubble].status = value;
@@ -146,6 +155,7 @@ void startBle() {
   NimBLECharacteristic* status = service->createCharacteristic(
       BLE_STATUS_UUID, NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR);
   status->setCallbacks(new BleStatusCallbacks());
+  actionCharacteristic = service->createCharacteristic(BLE_ACTION_UUID, NIMBLE_PROPERTY::NOTIFY);
   service->start();
   NimBLEAdvertising* advertising = NimBLEDevice::getAdvertising();
   advertising->addServiceUUID(BLE_SERVICE_UUID);
@@ -308,6 +318,7 @@ void draw() {
   constexpr uint16_t headerColor = 0x0B2E;
   constexpr int headerHeight = 28;
   int count = min(4, dashboard.bubbleCount);
+  for (auto& hit : bubbleHits) hit.radius = 0;
   uint64_t visibleTokens = 0;
   for (int i = 0; i < count; ++i) visibleTokens += dashboard.bubbles[i].tokens;
   d.fillRect(0, 0, 320, headerHeight, headerColor);
@@ -355,6 +366,10 @@ void draw() {
                        dashboard.bubbles[i].status == "STOP" ? 0xBDF7 :
                        dashboard.bubbles[i].status == "DONE" ? 0x07E0 : 0xFFE0;
       drawTaskBubble(positions[count - 1][i][0], positions[count - 1][i][1], radius, dashboard.bubbles[i], color);
+      bubbleHits[i].x = positions[count - 1][i][0];
+      bubbleHits[i].y = positions[count - 1][i][1];
+      bubbleHits[i].radius = radius;
+      bubbleHits[i].id = dashboard.bubbles[i].id;
     }
   }
   // Keep all secondary information on one line, reserving y=33..219 for tasks.
@@ -364,6 +379,7 @@ void draw() {
     footer += "  L " + String(dashboard.secondaryPercent) + "% R2 " + longReset;
   }
   d.setTextSize(2);
+  if (static_cast<int32_t>(hideNoticeUntil - millis()) > 0) footer = "Hide requested";
   int footerWidth = d.textWidth(footer);
   if (footerWidth > 304) d.setTextSize(2.0f * 304 / footerWidth);
   d.setTextColor(TFT_WHITE, TFT_BLACK);
@@ -433,8 +449,33 @@ void loop() {
   portal.handleClient();
   bool touching = M5.Touch.getCount() > 0;
   if (touching && !wasTouching) {
-    startPortal();
-    lastError = "Setup AP enabled";
+    auto touch = M5.Touch.getDetail();
+    pressX = touch.x; pressY = touch.y;
+    pressedAt = millis();
+    pressedTask = "";
+    pressHandled = false;
+    for (const auto& hit : bubbleHits) {
+      int dx = touch.x - hit.x, dy = touch.y - hit.y;
+      if (hit.radius > 0 && dx * dx + dy * dy <= hit.radius * hit.radius) {
+        pressedTask = hit.id;
+        break;
+      }
+    }
+  }
+  if (touching && !pressHandled && pressedTask.length()) {
+    auto touch = M5.Touch.getDetail();
+    if (abs(touch.x - pressX) > 12 || abs(touch.y - pressY) > 12 || M5.Touch.getCount() != 1) {
+      pressHandled = true;
+    } else if (millis() - pressedAt >= 1000) {
+      pressHandled = true;
+      // Use the ID captured at touch-down, never a possibly reordered index.
+      if (bleConnected && actionCharacteristic) {
+        String command = "HIDE=" + pressedTask;
+        actionCharacteristic->setValue(command.c_str());
+        if (actionCharacteristic->notify()) hideNoticeUntil = millis() + 1800;
+        dashboardDirty = true;
+      }
+    }
   }
   wasTouching = touching;
   bool running = false;

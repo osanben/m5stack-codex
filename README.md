@@ -35,13 +35,17 @@ ipconfig getifaddr en0
 pio run -t upload --upload-port /dev/cu.usbmodem1201
 ```
 
-首次开机或轻触屏幕后，设备会开启配置热点：
+开机后，设备会开启配置热点：
 
 - SSID：`CODEX-TIP-SETUP`
 - 密码：`codex-tip`
 - 在浏览器打开 `http://192.168.4.1`，填写 Wi‑Fi 与 `http://<MAC-LAN-IP>:8765/status`。
 
-固件优先使用已保存的配置；没有保存配置时会尝试 ESP32 现存的 Wi‑Fi station 配置。触摸屏幕可再次开启配置页面。
+固件优先使用已保存的配置；没有保存配置时会尝试 ESP32 现存的 Wi‑Fi station 配置。
+
+## 长按隐藏任务（蓝牙）
+
+按住任务气泡约 1 秒即可从状态屏列表隐藏；拖动或多指触摸会取消此次操作。操作只隐藏仪表盘条目，不删除 Codex 会话、不停止任务。隐藏记录保存在 Mac 的 `~/.codex/codex-tip-dismissed.json`，重启后仍有效；同一线程开始新一轮任务时重新显示。右上角 token 合计随可见列表更新。
 
 ## 蓝牙模式（默认启用）
 

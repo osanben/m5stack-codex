@@ -23,6 +23,7 @@ except ImportError:  # BLE stays optional for HTTP-only installations.
 
 BLE_SERVICE_UUID = "5f6d0001-7f62-4da0-99e6-401b1de91a00"
 BLE_STATUS_UUID = "5f6d0002-7f62-4da0-99e6-401b1de91a00"
+BLE_ACTION_UUID = "5f6d0003-7f62-4da0-99e6-401b1de91a00"
 STATE_DIR = Path.home() / ".codex"
 TASK_STATE_PATH = STATE_DIR / "codex-tip-task-state.json"
 STATUS_CACHE_PATH = STATE_DIR / "codex-tip-status.json"
@@ -123,6 +124,28 @@ CLIENT = CodexClient()
 CACHE: dict[str, Any] = {"at": 0.0, "data": read_json_file(STATUS_CACHE_PATH, None), "error": "Starting…", "refreshing": False}
 CACHE_LOCK = threading.Lock()
 TASK_LOCK = threading.Lock()
+DISMISSED_PATH = STATE_DIR / "codex-tip-dismissed.json"
+DISMISSED = read_json_file(DISMISSED_PATH, {})
+
+
+def task_hidden(item: dict[str, Any]) -> bool:
+    cutoff = DISMISSED.get(item.get("thread_id", ""))
+    return cutoff is not None and int(item.get("started_at") or 0) <= cutoff
+
+
+def handle_device_action(_characteristic: Any, packet: bytearray) -> None:
+    message = bytes(packet).decode("utf-8", errors="replace")
+    if not message.startswith("HIDE="):
+        return
+    turn_id = message[5:]
+    with TASK_LOCK:
+        item = TRACKER.turns.get(turn_id)
+        if not item or not item.get("thread_id"):
+            return
+        thread_id = item["thread_id"]
+        DISMISSED[thread_id] = max(DISMISSED.get(thread_id, 0), int(item.get("started_at") or 0))
+        write_json_file(DISMISSED_PATH, DISMISSED)
+    print(f"Dashboard task hidden: {turn_id}", flush=True)
 
 
 class ReconnectTracker:
@@ -414,6 +437,8 @@ def live_task_status() -> dict[str, Any]:
     task_activity: list[int] = []
     for item in cli_active:
         thread_id = item.get("thread_id", "")
+        if task_hidden(item):
+            continue
         if not thread_id or thread_id in seen_threads:
             continue
         seen_threads.add(thread_id)
@@ -427,11 +452,12 @@ def live_task_status() -> dict[str, Any]:
             # task. Keep its newer/higher-token record as one dashboard task.
             if activity >= task_activity[index] or tokens > task_items[index]["tokens"]:
                 task_items[index]["tokens"] = tokens
+                task_items[index]["id"] = item["turn_id"]
                 task_activity[index] = activity
             task_index_by_thread[thread_id] = index
             continue
         reconnecting = RECONNECT_TRACKER.reconnecting.get(thread_id) == item.get("turn_id")
-        task_items.append({"name": name, "tokens": tokens,
+        task_items.append({"id": item["turn_id"], "name": name, "tokens": tokens,
                            "status": "WAITING" if item.get("waiting") else "RECONNECTING" if reconnecting else "ACTIVE"})
         index = len(task_items) - 1
         task_index_by_thread[thread_id] = index
@@ -439,6 +465,8 @@ def live_task_status() -> dict[str, Any]:
         task_activity.append(activity)
     active_count = len(task_items)
     for item in just_completed:
+        if task_hidden(item):
+            continue
         thread_id = item.get("thread_id", "")
         if thread_id in seen_threads:
             # Current activity takes precedence over a previous completion.
@@ -446,7 +474,7 @@ def live_task_status() -> dict[str, Any]:
         if len(task_items) >= 4:
             break
         title, tokens, _ = local_thread_details(thread_id)
-        task_items.append({"name": title or "Codex task", "tokens": tokens,
+        task_items.append({"id": item["turn_id"], "name": title or "Codex task", "tokens": tokens,
                            "status": "INTERRUPTED" if item.get("status") == "interrupted" else "COMPLETED"})
     task_items = task_items[:4]
     return {"active": active_count, "recent": 0,
@@ -543,7 +571,7 @@ def ble_task_frames(status: dict[str, Any]) -> list[bytes]:
         # meaningful task label while each write remains safely below MTU.
         name = str(task.get("name") or "Task").replace(";", ",").replace("=", ":").replace("\n", " ")[:18]
         state = {"COMPLETED": "DONE", "WAITING": "WAIT", "RECONNECTING": "WAIT", "INTERRUPTED": "STOP"}.get(task.get("status"), "RUN")
-        frames.append(f"I={index};N={name};V={int(task.get('tokens') or 0)};X={state}".encode())
+        frames.append(f"I={index};K={task.get('id', '')};N={name};V={int(task.get('tokens') or 0)};X={state}".encode())
     return frames
 
 
@@ -561,6 +589,9 @@ async def ble_loop() -> None:
                 continue
             async with BleakClient(device) as client:
                 print(f"BLE connected: {device.address}", flush=True)
+                if client.services.get_characteristic(BLE_ACTION_UUID):
+                    await client.start_notify(BLE_ACTION_UUID, handle_device_action)
+                    print("BLE task actions subscribed", flush=True)
                 while client.is_connected:
                     status = current_status()
                     await client.write_gatt_char(BLE_STATUS_UUID, ble_frame(status), response=False)
