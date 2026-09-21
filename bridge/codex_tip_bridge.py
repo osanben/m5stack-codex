@@ -487,9 +487,7 @@ def ble_frame(status: dict[str, Any]) -> bytes:
         "Q": int(quota_stale),
         "T": clean(tasks.get("headline")), "E": clean(tasks.get("event"), 42),
     }
-    if quota_stale:
-        fields["P"] = -1
-        fields["S"] = -1
+    # Keep last-known percentages visible; Q explicitly marks stale data.
     return ";".join(f"{key}={value}" for key, value in fields.items()).encode()
 
 

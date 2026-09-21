@@ -288,17 +288,16 @@ void draw() {
   int count = min(4, dashboard.bubbleCount);
   if (count == 0) {
     centered(151, "NO ACTIVE TASK", 0xBDF7, 2);
-    centered(177, "Today " + compactNumber(dashboard.todayTokens) + " tokens", TFT_WHITE, 1);
-    centered(195, "Life " + compactNumber(dashboard.lifetimeTokens) + "   Reset " + String(dashboard.resetCredits < 0 ? 0 : dashboard.resetCredits), 0xBDF7, 1);
+    centered(177, "Reset credits " + String(dashboard.resetCredits < 0 ? 0 : dashboard.resetCredits), 0xBDF7, 1);
   } else {
     static const int positions[4][4][2] = {
       {{160,169},{0,0},{0,0},{0,0}},
       {{92,169},{228,169},{0,0},{0,0}},
       {{80,177},{160,142},{240,177},{0,0}},
-      {{88,141},{232,141},{88,204},{232,204}}
+      {{88,141},{232,141},{88,198},{232,198}}
     };
     static const int minRadius[] = {42, 31, 25, 21};
-    static const int maxRadius[] = {56, 46, 37, 29};
+    static const int maxRadius[] = {52, 46, 37, 26};
     uint64_t maxTokens = 1;
     for (int i = 0; i < count; ++i) maxTokens = max(maxTokens, dashboard.bubbles[i].tokens);
     for (int i = 0; i < count; ++i) {
@@ -312,8 +311,10 @@ void draw() {
       drawTaskBubble(positions[count - 1][i][0], positions[count - 1][i][1], radius, dashboard.bubbles[i], color);
     }
   }
-  if (dashboard.event.length()) centered(222, "✓ " + dashboard.event, 0x5EF7, 1);
-  else if (count) centered(222, "RUN:YELLOW WAIT:RED DONE:GREEN", 0xBDF7, 1);
+  // Usage stays visible even while task bubbles occupy the dashboard.
+  d.fillRect(0, 228, 320, 12, TFT_BLACK);
+  centered(231, "Today " + compactNumber(dashboard.todayTokens) +
+           "   Life " + compactNumber(dashboard.lifetimeTokens) + " tokens", TFT_WHITE, 1);
   screen.pushSprite(0, 0);
 }
 
