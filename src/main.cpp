@@ -267,37 +267,41 @@ void drawTaskBubble(int cx, int cy, int radius, const Dashboard::TaskBubble& tas
 void draw() {
   auto& d = screen;
   d.fillScreen(TFT_BLACK);
-  d.fillRect(0, 0, 320, 25, 0x0B2E28);
-  text(12, 10, dashboard.plan, TFT_WHITE, 2);
-  String taskState = dashboard.activeTasks ? String(dashboard.activeTasks) + " ACTIVE" : "NO ACTIVE TASK";
-  text(205, 9, taskState, dashboard.activeTasks ? 0x5EF7 : 0xBDF7, 1);
+  constexpr uint16_t headerColor = 0x0B2E;
+  constexpr int headerHeight = 28;
+  int count = min(4, dashboard.bubbleCount);
+  uint64_t visibleTokens = 0;
+  for (int i = 0; i < count; ++i) visibleTokens += dashboard.bubbles[i].tokens;
+  d.fillRect(0, 0, 320, headerHeight, headerColor);
+  d.setTextSize(2);
+  d.setTextColor(TFT_WHITE, headerColor);
+  int headerY = (headerHeight - d.fontHeight()) / 2;
+  d.setCursor(12, headerY);
+  d.print(dashboard.plan);
+  String total = compactNumber(visibleTokens);
+  d.setCursor(308 - d.textWidth(total), headerY);
+  d.print(total);
 
   text(14, 32, dashboard.quotaStale ? "QUOTA STALE" : "QUOTA", dashboard.quotaStale ? 0xFD20 : 0x75D7, 1);
   String p = dashboard.primaryPercent < 0 ? "--" : String(dashboard.primaryPercent) + "%";
   text(14, 43, p, TFT_WHITE, 3);
   String reset = dashboard.primaryResetMinutes >= 0 ? duration(dashboard.primaryResetMinutes) : until(dashboard.primaryReset);
-  text(190, 50, "R " + reset, 0xBDF7, 2);
   progress(13, 76, dashboard.primaryPercent, dashboard.primaryPercent > 80 ? 0xFD20 : 0x05F6);
   if (dashboard.secondaryPercent >= 0) {
-    text(14, 91, "LONG WINDOW  " + String(dashboard.secondaryPercent) + "%", 0xBDF7, 1);
-    String longReset = dashboard.secondaryResetMinutes >= 0 ? duration(dashboard.secondaryResetMinutes) : until(dashboard.secondaryReset);
-    text(198, 91, "R " + longReset, 0xBDF7, 1);
-    progress(13, 105, dashboard.secondaryPercent, 0xB885);
+    text(164, 50, "LONG " + String(dashboard.secondaryPercent) + "%", 0xBDF7, 2);
   }
 
-  int count = min(4, dashboard.bubbleCount);
   if (count == 0) {
-    centered(151, "NO ACTIVE TASK", 0xBDF7, 2);
-    centered(177, "Reset credits " + String(dashboard.resetCredits < 0 ? 0 : dashboard.resetCredits), 0xBDF7, 1);
+    centered(133, "NO ACTIVE TASK", 0xBDF7, 2);
   } else {
     static const int positions[4][4][2] = {
-      {{160,169},{0,0},{0,0},{0,0}},
-      {{92,169},{228,169},{0,0},{0,0}},
-      {{80,177},{160,142},{240,177},{0,0}},
-      {{88,141},{232,141},{88,198},{232,198}}
+      {{160,135},{0,0},{0,0},{0,0}},
+      {{92,135},{228,135},{0,0},{0,0}},
+      {{70,147},{160,119},{250,147},{0,0}},
+      {{88,111},{232,111},{88,160},{232,160}}
     };
-    static const int minRadius[] = {42, 31, 25, 21};
-    static const int maxRadius[] = {52, 46, 37, 26};
+    static const int minRadius[] = {38, 31, 25, 21};
+    static const int maxRadius[] = {46, 44, 32, 23};
     uint64_t maxTokens = 1;
     for (int i = 0; i < count; ++i) maxTokens = max(maxTokens, dashboard.bubbles[i].tokens);
     for (int i = 0; i < count; ++i) {
@@ -311,10 +315,13 @@ void draw() {
       drawTaskBubble(positions[count - 1][i][0], positions[count - 1][i][1], radius, dashboard.bubbles[i], color);
     }
   }
-  // Usage stays visible even while task bubbles occupy the dashboard.
-  d.fillRect(0, 228, 320, 12, TFT_BLACK);
-  centered(231, "Today " + compactNumber(dashboard.todayTokens) +
-           "   Life " + compactNumber(dashboard.lifetimeTokens) + " tokens", TFT_WHITE, 1);
+  // Secondary information has its own footer, clear of the task circles.
+  centered(187, "Life " + compactNumber(dashboard.lifetimeTokens), TFT_WHITE, 2);
+  centered(205, "R " + reset, 0xBDF7, 2);
+  if (dashboard.secondaryPercent >= 0) {
+    String longReset = dashboard.secondaryResetMinutes >= 0 ? duration(dashboard.secondaryResetMinutes) : until(dashboard.secondaryReset);
+    centered(223, "R2 " + longReset, 0xBDF7, 2);
+  }
   screen.pushSprite(0, 0);
 }
 
