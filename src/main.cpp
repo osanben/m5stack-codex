@@ -292,16 +292,16 @@ void draw() {
   }
 
   if (count == 0) {
-    centered(133, "NO ACTIVE TASK", 0xBDF7, 2);
+    centered(147, "NO ACTIVE TASK", 0xBDF7, 2);
   } else {
     static const int positions[4][4][2] = {
-      {{160,135},{0,0},{0,0},{0,0}},
-      {{92,135},{228,135},{0,0},{0,0}},
-      {{70,147},{160,119},{250,147},{0,0}},
-      {{88,111},{232,111},{88,160},{232,160}}
+      {{160,153},{0,0},{0,0},{0,0}},
+      {{92,153},{228,153},{0,0},{0,0}},
+      {{65,173},{160,126},{255,173},{0,0}},
+      {{88,119},{232,119},{88,187},{232,187}}
     };
-    static const int minRadius[] = {38, 31, 25, 21};
-    static const int maxRadius[] = {46, 44, 32, 23};
+    static const int minRadius[] = {44, 36, 29, 25};
+    static const int maxRadius[] = {62, 59, 41, 31};
     uint64_t maxTokens = 1;
     for (int i = 0; i < count; ++i) maxTokens = max(maxTokens, dashboard.bubbles[i].tokens);
     for (int i = 0; i < count; ++i) {
@@ -315,13 +315,19 @@ void draw() {
       drawTaskBubble(positions[count - 1][i][0], positions[count - 1][i][1], radius, dashboard.bubbles[i], color);
     }
   }
-  // Secondary information has its own footer, clear of the task circles.
-  centered(187, "Life " + compactNumber(dashboard.lifetimeTokens), TFT_WHITE, 2);
-  centered(205, "R " + reset, 0xBDF7, 2);
+  // Keep all secondary information on one line, reserving y=85..219 for tasks.
+  String footer = "Life " + compactNumber(dashboard.lifetimeTokens) + "  R " + reset;
   if (dashboard.secondaryPercent >= 0) {
     String longReset = dashboard.secondaryResetMinutes >= 0 ? duration(dashboard.secondaryResetMinutes) : until(dashboard.secondaryReset);
-    centered(223, "R2 " + longReset, 0xBDF7, 2);
+    footer += "  R2 " + longReset;
   }
+  d.setTextSize(2);
+  int footerWidth = d.textWidth(footer);
+  if (footerWidth > 304) d.setTextSize(2.0f * 304 / footerWidth);
+  d.setTextColor(TFT_WHITE, TFT_BLACK);
+  d.setCursor((320 - d.textWidth(footer)) / 2, 221 + (19 - d.fontHeight()) / 2);
+  d.print(footer);
+  d.setTextSize(1);
   screen.pushSprite(0, 0);
 }
 
