@@ -5,11 +5,13 @@
 #include <Preferences.h>
 #include <WebServer.h>
 #include <NimBLEDevice.h>
+#include <esp_heap_caps.h>
 
 namespace {
 // BLE is the primary transport and pushes updates as they happen. Keep the
 // HTTP fallback responsive too when BLE is unavailable.
 constexpr uint32_t POLL_MS = 500;
+constexpr uint32_t MEMORY_LOG_MS = 5000;
 constexpr uint32_t WIFI_TIMEOUT_MS = 15000;
 constexpr char AP_SSID[] = "CODEX-TIP-SETUP";
 constexpr char AP_PASSWORD[] = "codex-tip";
@@ -24,6 +26,7 @@ String configuredSsid;
 String lastError;
 uint32_t nextPoll = 0;
 uint32_t lastDrawAt = 0;
+uint32_t lastMemoryLogAt = 0;
 bool wasTouching = false;
 volatile bool bleConnected = false;
 volatile uint32_t lastBleAt = 0;
@@ -51,6 +54,30 @@ struct Dashboard {
   int incomingBubble = -1;
   bool valid = false;
 } dashboard;
+
+void logHeap(const char* name, uint32_t caps) {
+  multi_heap_info_t info = {};
+  heap_caps_get_info(&info, caps);
+  size_t total = info.total_allocated_bytes + info.total_free_bytes;
+  Serial.printf("[MEM] %s total=%u used=%u free=%u min_free=%u largest=%u used_pct=%.1f\n",
+                name, static_cast<unsigned>(total),
+                static_cast<unsigned>(info.total_allocated_bytes),
+                static_cast<unsigned>(info.total_free_bytes),
+                static_cast<unsigned>(info.minimum_free_bytes),
+                static_cast<unsigned>(info.largest_free_block),
+                total ? 100.0 * info.total_allocated_bytes / total : 0.0);
+}
+
+void logMemory() {
+  // USB monitoring is optional; avoid writing telemetry without a reader.
+  if (!Serial) return;
+  Serial.printf("[MEM] uptime_s=%lu ble=%s tasks=%d unit=bytes\n",
+                static_cast<unsigned long>(millis() / 1000),
+                bleConnected ? "connected" : "disconnected", dashboard.bubbleCount);
+  // Separate internal and external 8-bit heaps: do not double-count PSRAM.
+  logHeap("INTERNAL", MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+  logHeap("PSRAM", MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+}
 
 void applyBleStatus(const std::string& packet) {
   // The Mac sends a compact key=value frame. It fits in a single BLE write
@@ -393,10 +420,16 @@ void setup() {
                 WiFi.localIP().toString().c_str(), bridgeUrl.c_str());
   configTime(0, 0, "pool.ntp.org", "time.cloudflare.com");
   draw();
+  logMemory();
+  lastMemoryLogAt = millis();
 }
 
 void loop() {
   M5.update();
+  if (millis() - lastMemoryLogAt >= MEMORY_LOG_MS) {
+    lastMemoryLogAt = millis();
+    logMemory();
+  }
   portal.handleClient();
   bool touching = M5.Touch.getCount() > 0;
   if (touching && !wasTouching) {

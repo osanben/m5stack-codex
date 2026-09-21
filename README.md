@@ -47,6 +47,16 @@ pio run -t upload --upload-port /dev/cu.usbmodem1201
 
 烧录后设备广播名为 `CODEX-TIP` 的 BLE 服务。本机桥接以 BLE 中心方式自动发现并连接它，然后每 0.25 秒写入只读仪表盘状态。因此不需要填 Wi‑Fi、Bridge URL 或将端口开放到网络。显示左上角出现 `BLE LIVE` 即表示成功。
 
+## 实时内存监控
+
+固件每 5 秒输出一组 `[MEM]` 日志，分别统计内部 RAM 和 PSRAM 的可分配堆（单位：字节）。这不是芯片全部物理内存，也不包括已被静态段占用的空间。
+
+```sh
+.venv/bin/pio device monitor --port /dev/cu.usbmodem1101 --baud 115200
+```
+
+`total`：堆总量；`used` / `free`：当前已用 / 剩余；`min_free`：启动以来低水位；`largest`：最大连续空闲块；`used_pct`：堆使用百分比。新增功能时重点对比 `free`、`min_free` 和 `largest`。PSRAM 未启用或不可用时显示为 0。按 Ctrl+C 退出。串口号可能变化，先用 `.venv/bin/pio device list` 确认 M5Stack 的 USB 序列号 `44:1B:F6:E3:9C:C0`。
+
 ## 验证桥接服务
 
 ```sh
