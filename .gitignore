@@ -1,0 +1,4 @@
+.pio/
+.venv/
+bridge/__pycache__/
+bridge/.env
