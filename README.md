@@ -1,5 +1,29 @@
 # Codex Tip — M5Stack CoreS3 实时仪表盘
 
+## Mac 桌面应用：Agent Display
+
+原生 SwiftUI 界面管理 Python 后台，关闭窗口不会停止 M5Stack 推送。
+
+当前 Mac 已安装到 `~/Applications/Agent Display.app`，可直接从 Finder 打开。
+
+```sh
+python3 desktop/build_app.py
+open "dist/Agent Display.app"
+```
+
+需要 macOS 13+、Xcode Command Line Tools，以及已安装并运行的桥接 LaunchAgent（本项目当前 Mac 已配置）。这是本机构建版本，尚未打包独立 Python 运行时或做 Developer ID 公证；请保留项目目录和 `.venv`。当前后台地址为 `127.0.0.1:8765`。
+
+- **概览**：设备连接状态、套餐、可见任务 token 合计、账户错误。
+- **任务**：与屏幕同步的 4 个任务、隐藏任务、恢复隐藏记录。
+- **设置**：蓝牙开关、完成状态保留小时数、推送间隔、账户刷新间隔，保存后立即生效。
+- **Agent**：当前接入 Codex。OpenCode 尚未实现，界面明确显示待接入。
+
+设置保存到 `~/Library/Application Support/Agent Display/settings.json`。同目录的 `control-token` 仅允许当前用户读取，桌面控制接口同时检查 loopback 来源和 Bearer token，不开放跨域。旧 `/status` 和 BLE 数据格式保持兼容。
+
+扩展入口是 `bridge/desktop_runtime.py` 的 `AgentProvider`：实现 `status()`、`hide()`、`restore_hidden()`，并注册到 `RUNTIME.providers`，桌面选择器自动列出已注册的数据源。`status()` 返回现有 dashboard schema；任务 ID 必须稳定、唯一且能通过 BLE 传输。当前一次选择一个 Agent。本次提取了 provider 边界；Codex 原有日志解析仍保留在桥接模块中，避免改变已验证的任务状态行为。
+
+后台/API 测试：`.venv/bin/python -m unittest discover -s bridge -p 'test_*.py'`。
+
 这是给已连接 **M5Stack CoreS3（ESP32-S3）** 的固件和本机只读桥接服务。屏幕实时显示：
 
 - Codex 用量窗口、下次重置时间、套餐；

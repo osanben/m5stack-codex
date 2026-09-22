@@ -15,6 +15,7 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
+from desktop_runtime import DesktopRuntime
 
 try:
     from bleak import BleakClient, BleakScanner
@@ -38,6 +39,10 @@ INTERRUPTION_DISPLAY_SECONDS = 30 * 60
 LIVE_PUSH_SECONDS = 0.25
 # Account/usage RPCs are slower and independent of task lifecycle state.
 ACCOUNT_CACHE_SECONDS = 2.0
+RUNTIME = DesktopRuntime()
+COMPLETION_DISPLAY_SECONDS = RUNTIME.settings["completionHours"] * 3600
+LIVE_PUSH_SECONDS = RUNTIME.settings["pushInterval"]
+ACCOUNT_CACHE_SECONDS = RUNTIME.settings["accountInterval"]
 
 
 def read_json_file(path: Path, fallback: Any) -> Any:
@@ -577,10 +582,16 @@ def ble_task_frames(status: dict[str, Any]) -> list[bytes]:
 
 async def ble_loop() -> None:
     if BleakScanner is None:
+        RUNTIME.set_device("error", error="Bleak is not installed")
         print("BLE disabled: install bleak to enable it", flush=True)
         return
     while True:
         try:
+            if not RUNTIME.settings["bleEnabled"]:
+                RUNTIME.set_device("paused")
+                await asyncio.sleep(.5)
+                continue
+            RUNTIME.set_device("scanning")
             device = await BleakScanner.find_device_by_filter(
                 lambda d, ad: d.name == "CODEX-TIP" or BLE_SERVICE_UUID.lower() in
                 {str(uuid).lower() for uuid in (ad.service_uuids or [])}, timeout=8.0)
@@ -588,12 +599,13 @@ async def ble_loop() -> None:
                 await asyncio.sleep(3)
                 continue
             async with BleakClient(device) as client:
+                RUNTIME.set_device("connected", device.address)
                 print(f"BLE connected: {device.address}", flush=True)
                 if client.services.get_characteristic(BLE_ACTION_UUID):
-                    await client.start_notify(BLE_ACTION_UUID, handle_device_action)
+                    await client.start_notify(BLE_ACTION_UUID, dispatch_device_action)
                     print("BLE task actions subscribed", flush=True)
-                while client.is_connected:
-                    status = current_status()
+                while client.is_connected and RUNTIME.settings["bleEnabled"]:
+                    status = RUNTIME.provider().status()
                     await client.write_gatt_char(BLE_STATUS_UUID, ble_frame(status), response=False)
                     for frame in ble_task_frames(status):
                         await client.write_gatt_char(BLE_STATUS_UUID, frame, response=False)
@@ -601,6 +613,7 @@ async def ble_loop() -> None:
                     # account RPC fields remain cached independently.
                     await asyncio.sleep(LIVE_PUSH_SECONDS)
         except Exception as exc:
+            RUNTIME.set_device("error", error=str(exc))
             print(f"BLE reconnecting: {exc}", flush=True)
             await asyncio.sleep(3)
 
@@ -610,18 +623,100 @@ def start_ble_publisher() -> None:
     thread.start()
 
 
+class CodexProvider:
+    id = "codex"
+    name = "Codex"
+
+    def status(self):
+        return current_status()
+
+    def hide(self, task_id):
+        with TASK_LOCK:
+            if task_id not in TRACKER.turns:
+                raise ValueError("Task no longer exists")
+        handle_device_action(None, bytearray(f"HIDE={task_id}".encode()))
+
+    def restore_hidden(self):
+        with TASK_LOCK:
+            DISMISSED.clear()
+            write_json_file(DISMISSED_PATH, DISMISSED)
+
+
+RUNTIME.providers["codex"] = CodexProvider()
+
+
+def dispatch_device_action(_characteristic, packet):
+    message = bytes(packet).decode("utf-8", errors="replace")
+    if message.startswith("HIDE="):
+        try:
+            RUNTIME.provider().hide(message[5:])
+        except ValueError as exc:
+            print(f"Ignored stale device action: {exc}", flush=True)
+
+
 class Handler(BaseHTTPRequestHandler):
+    def respond(self, payload, code=200):
+        data = json.dumps(payload, ensure_ascii=False).encode()
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(data)
+
+    def authorized(self):
+        import hmac
+        return (self.client_address[0] in ("127.0.0.1", "::1") and
+                hmac.compare_digest(self.headers.get("Authorization", ""), "Bearer " + RUNTIME.token))
+
     def do_GET(self) -> None:
+        if self.path == "/api/desktop":
+            if not self.authorized():
+                self.respond({"error": "Unauthorized"}, 403)
+                return
+            self.respond({**RUNTIME.snapshot(), "status": RUNTIME.provider().status(), "hiddenCount": len(DISMISSED)})
+            return
         if self.path not in ("/", "/status"):
             self.send_error(404)
             return
-        payload = json.dumps(current_status(), separators=(",", ":")).encode()
+        payload = json.dumps(RUNTIME.provider().status(), separators=(",", ":")).encode()
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(payload)))
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(payload)
+
+    def do_POST(self):
+        global COMPLETION_DISPLAY_SECONDS, LIVE_PUSH_SECONDS, ACCOUNT_CACHE_SECONDS
+        if not self.authorized():
+            self.respond({"error": "Unauthorized"}, 403)
+            return
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+            if not 0 < length <= 4096:
+                raise ValueError("Invalid request size")
+            body = json.loads(self.rfile.read(length))
+            if self.path == "/api/settings":
+                with TASK_LOCK:
+                    settings = RUNTIME.update(body)
+                    COMPLETION_DISPLAY_SECONDS = settings["completionHours"] * 3600
+                    LIVE_PUSH_SECONDS = settings["pushInterval"]
+                    ACCOUNT_CACHE_SECONDS = settings["accountInterval"]
+                    # Rehydrate previously expired completions when extending retention.
+                    TRACKER.__init__()
+            elif self.path == "/api/tasks/hide":
+                RUNTIME.provider().hide(body["id"])
+            elif self.path == "/api/tasks/restore":
+                RUNTIME.provider().restore_hidden()
+            else:
+                self.respond({"error": "Not found"}, 404)
+                return
+            self.respond({"ok": True})
+        except (ValueError, KeyError, TypeError) as exc:
+            self.respond({"error": str(exc)}, 400)
+        except OSError as exc:
+            self.respond({"error": str(exc)}, 500)
 
     def log_message(self, *_: Any) -> None:
         pass

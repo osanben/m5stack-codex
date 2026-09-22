@@ -2,3 +2,5 @@
 .venv/
 bridge/__pycache__/
 bridge/.env
+dist/
+**/__pycache__/
