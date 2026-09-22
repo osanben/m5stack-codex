@@ -397,7 +397,7 @@ void drawPower() {
   powerCard(164, 163, "运行时间", String(millis() / 60000) + " min", TFT_WHITE);
   screen.setFont(&fonts::efontCN_14);
   screen.setTextSize(1); screen.setTextColor(0xBDF7, TFT_BLACK);
-  screen.setCursor(8, 220); screen.print("左右滑切页 · 空闲5秒自动切换");
+  screen.setCursor(8, 220); screen.print("电源页不自动切换 · 左右滑返回");
   screen.setFont(&fonts::Font0);
   screen.pushSprite(0, 0);
 }

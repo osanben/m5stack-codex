@@ -26,14 +26,23 @@ int main() {
   PageRotation pages;
   assert(!pages.tick(4999, false));
   assert(pages.tick(5000, false) && pages.page == 1);
-  pages.manual(1, 6000); assert(pages.page == 2);
-  assert(!pages.tick(10999, false));
-  assert(pages.tick(11000, false) && pages.page == 0);
+  assert(pages.tick(10000, false) && pages.page == 0);
   pages.manual(-1, 12000); assert(pages.page == 2);
+  assert(!pages.tick(17000, false) && pages.page == 2);
+  assert(!pages.tick(72000, false) && pages.page == 2);
+  pages.manual(-1, 73000); assert(pages.page == 1);
+  assert(!pages.tick(77999, false));
+  assert(pages.tick(78000, false) && pages.page == 0);
+  pages.manual(1, 79000); assert(pages.page == 1);
+  pages.manual(1, 80000); assert(pages.page == 2);
+  assert(!pages.tick(85000, false) && pages.page == 2);
+  pages.manual(1, 86000); assert(pages.page == 0);
+  // Reset to independently test touch pause/release and timer wraparound.
+  pages = PageRotation();
   assert(!pages.tick(20000, true));
   pages.interact(21000); // touch release restarts the full five seconds
   assert(!pages.tick(25999, false));
-  assert(pages.tick(26000, false) && pages.page == 0);
+  assert(pages.tick(26000, false) && pages.page == 1);
   pages.interact(UINT32_MAX - 1000);
   assert(!pages.tick(1000, false));
   assert(pages.tick(4000, false));
