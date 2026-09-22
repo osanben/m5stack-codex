@@ -2,16 +2,19 @@
 
 ## Mac 桌面应用：Agent Display
 
-原生 SwiftUI 界面管理 Python 后台，关闭窗口不会停止 M5Stack 推送。
+原生 SwiftUI 桌面应用，任务解析、SQLite 读取、账户 RPC、HTTP 接口和 CoreBluetooth 推送全部在应用内运行，不依赖 Python 服务。关闭窗口后继续在菜单栏运行；菜单栏选择退出才停止推送。
 
 当前 Mac 已安装到 `~/Applications/Agent Display.app`，可直接从 Finder 打开。
 
 ```sh
 python3 desktop/build_app.py
 open "dist/Agent Display.app"
+"dist/Agent Display.app/Contents/MacOS/AgentDisplay" --self-test
 ```
 
-需要 macOS 13+、Xcode Command Line Tools，以及已安装并运行的桥接 LaunchAgent（本项目当前 Mac 已配置）。这是本机构建版本，尚未打包独立 Python 运行时或做 Developer ID 公证；请保留项目目录和 `.venv`。当前后台地址为 `127.0.0.1:8765`。
+运行需要 macOS 13+、Codex 应用或 CLI，以及系统蓝牙权限。首次打开请允许 Agent Display 使用蓝牙；完成通知可选。编译需要 Xcode Command Line Tools 和 Python 3（仅用于构建脚本，应用运行不需要 Python 或 `.venv`）。这是本机构建、临时签名版本，尚未做 Developer ID 公证。后台地址为 `127.0.0.1:8765`。日志为 `~/Library/Logs/Agent Display.log`。
+
+本机原 Python LaunchAgent `com.codex.tip.bridge` 已停止并禁用，源码和配置保留以便回退，不要与桌面应用同时启动。原设置、完成任务状态和隐藏记录沿用原文件；迁移前备份位于 `~/Library/Application Support/Agent Display/migration-native-20260922/`。桌面应用登录启动由 `com.codex.tip.desktop` LaunchAgent 负责。
 
 - **概览**：设备连接状态、套餐、可见任务 token 合计、账户错误。
 - **任务**：与屏幕同步的 4 个任务、隐藏任务、恢复隐藏记录。
@@ -20,27 +23,27 @@ open "dist/Agent Display.app"
 
 设置保存到 `~/Library/Application Support/Agent Display/settings.json`。同目录的 `control-token` 仅允许当前用户读取，桌面控制接口同时检查 loopback 来源和 Bearer token，不开放跨域。旧 `/status` 和 BLE 数据格式保持兼容。
 
-扩展入口是 `bridge/desktop_runtime.py` 的 `AgentProvider`：实现 `status()`、`hide()`、`restore_hidden()`，并注册到 `RUNTIME.providers`，桌面选择器自动列出已注册的数据源。`status()` 返回现有 dashboard schema；任务 ID 必须稳定、唯一且能通过 BLE 传输。当前一次选择一个 Agent。本次提取了 provider 边界；Codex 原有日志解析仍保留在桥接模块中，避免改变已验证的任务状态行为。
+原生扩展入口是 `desktop/NativeCore.swift` 的 `NativeAgentProvider`：提供任务状态、隐藏和恢复接口。新增 Agent 还需在 `NativeRuntime` 注册来源、设置校验和独立账户查询实现。当前只接入 Codex；OpenCode 仍为后续扩展，不会伪造其状态。
 
-后台/API 测试：`.venv/bin/python -m unittest discover -s bridge -p 'test_*.py'`。
+原生自测涵盖异步确认、Esc 中断、72 小时保留、隐藏/新一轮恢复、重连红色、设置校验和不完整日志行。`--snapshot` 可只读输出当前任务，不连接蓝牙、不修改状态文件。旧 Python 回归测试仍保留：`.venv/bin/python -m unittest discover -s bridge -p 'test_*.py'`。
 
 这是给已连接 **M5Stack CoreS3（ESP32-S3）** 的固件和本机只读桥接服务。屏幕实时显示：
 
 - Codex 用量窗口、下次重置时间、套餐；
-- 当日与累计 token；
+- 可见任务 token 合计与累计用量；
 - 当前活跃任务、最近任务标题；
 - 已获得的限额重置次数。
 
 任务完成后会以绿色状态保留 72 小时（服务重启后仍保留）。屏幕最多显示 4 个任务，运行中的任务优先，其余位置显示最近完成的任务；同一任务开始新一轮时优先显示运行状态。
 
-数据来自本机 `codex app-server` 的只读 RPC：`account/rateLimits/read`、`account/usage/read`、`account/read` 和 `thread/list`。它不读取或传输 OpenAI 密钥，也不提供“消费重置额度”的写操作。
+账户数据来自本机 `codex app-server` 的只读 RPC：`account/rateLimits/read`、`account/usage/read`、`account/read`。任务来自本地会话日志和只读 SQLite 查询。额度查询在独立队列运行，正常缓存 2 秒，超时不会阻塞任务推送。它不向设备传输 OpenAI 密钥，也不提供“消费重置额度”的写操作。
 
-## 1. 启动桥接服务
+## 1. 启动桌面应用
 
 在运行 Codex 的 Mac 上：
 
 ```sh
-python3 bridge/codex_tip_bridge.py
+open "$HOME/Applications/Agent Display.app"
 ```
 
 查看 Mac 在局域网内的地址（示例）：
@@ -56,7 +59,9 @@ ipconfig getifaddr en0
 安装 PlatformIO 后运行：
 
 ```sh
-pio run -t upload --upload-port /dev/cu.usbmodem1201
+pio device list
+# 确认序列号 44:1B:F6:E3:9C:C0 对应 M5Stack 后再烧录；端口可能变化。
+pio run -t upload --upload-port /dev/cu.usbmodem1101
 ```
 
 开机后，设备会开启配置热点：
@@ -73,7 +78,7 @@ pio run -t upload --upload-port /dev/cu.usbmodem1201
 
 ## 蓝牙模式（默认启用）
 
-烧录后设备广播名为 `CODEX-TIP` 的 BLE 服务。本机桥接以 BLE 中心方式自动发现并连接它，然后每 0.25 秒写入只读仪表盘状态。因此不需要填 Wi‑Fi、Bridge URL 或将端口开放到网络。显示左上角出现 `BLE LIVE` 即表示成功。
+烧录后设备广播名为 `CODEX-TIP` 的 BLE 服务。桌面应用通过 CoreBluetooth 自动发现并连接它，然后默认每 0.25 秒写入只读仪表盘状态。因此不需要填 Wi‑Fi、Bridge URL 或将端口开放到网络。显示左上角出现 `BLE LIVE` 即表示成功。桌面应用迁移不需要重新烧录。
 
 ## 实时内存监控
 

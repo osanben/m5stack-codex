@@ -104,11 +104,8 @@ struct Snapshot: Decodable {
     }
 
     func startService() {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/bin/launchctl")
-        process.arguments = ["kickstart", "gui/\(getuid())/com.codex.tip.bridge"]
-        do { try process.run(); message = "已请求启动后台，正在连接…" }
-        catch { message = error.localizedDescription }
+        NativeRuntime.shared.start()
+        message = "正在连接应用内的原生后台…"
     }
 }
 
@@ -184,7 +181,7 @@ struct ContentView: View {
     }
     var deviceLabel: String {
         ["connected": "已连接", "scanning": "正在寻找 CODEX-TIP…", "paused": "蓝牙推送已暂停",
-         "error": "连接异常，自动重试中", "starting": "正在启动"][model.snapshot?.device.state ?? ""] ?? "等待后台"
+         "connecting": "正在连接设备…", "error": "连接异常，自动重试中", "starting": "正在启动"][model.snapshot?.device.state ?? ""] ?? "等待后台"
     }
     func metric(_ title: String, _ value: String, _ icon: String) -> some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -250,7 +247,7 @@ struct ContentView: View {
             HStack {
                 Button("保存设置") { Task { await model.save() } }.buttonStyle(.borderedProminent)
                     .disabled(!model.connected || model.busy)
-                Button("打开日志") { NSWorkspace.shared.open(URL(fileURLWithPath: "/tmp/codex-tip-bridge.log")) }
+                Button("打开日志") { NSWorkspace.shared.open(FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Logs/Agent Display.log")) }
                 Button("设置文件夹") { NSWorkspace.shared.open(model.folder) }
             }
         }.textFieldStyle(.roundedBorder)
@@ -258,9 +255,29 @@ struct ContentView: View {
     func number(_ value: Int) -> String { value.formatted(.number.notation(.compactName)) }
 }
 
-@main struct AgentDisplayApp: App {
+final class ApplicationDelegate: NSObject, NSApplicationDelegate {
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        NativeRuntime.shared.start()
+        if CommandLine.arguments.contains("--background") { NSApp.hide(nil) }
+    }
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
+    func applicationWillTerminate(_ notification: Notification) { NativeRuntime.shared.stop() }
+}
+
+struct TrayMenu: View {
+    @Environment(\.openWindow) var openWindow
+    var body: some View {
+        Button("打开 Agent Display") { openWindow(id: "main"); NSApp.activate(ignoringOtherApps: true) }
+        Divider()
+        Button("退出（停止设备推送）") { NSApp.terminate(nil) }
+    }
+}
+
+struct AgentDisplayApp: App {
+    @NSApplicationDelegateAdaptor(ApplicationDelegate.self) var delegate
     var body: some Scene {
-        WindowGroup("Agent Display") { ContentView() }
+        WindowGroup("Agent Display", id: "main") { ContentView() }
             .defaultSize(width: 980, height: 660)
+        MenuBarExtra("Agent Display", systemImage: "display") { TrayMenu() }
     }
 }
