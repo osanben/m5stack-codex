@@ -6,6 +6,7 @@
 #include <WebServer.h>
 #include <NimBLEDevice.h>
 #include <esp_heap_caps.h>
+#include "SwipeNavigation.h"
 
 namespace {
 // BLE is the primary transport and pushes updates as they happen. Keep the
@@ -25,6 +26,33 @@ uint32_t pressedAt = 0;
 int pressX = 0, pressY = 0;
 bool pressHandled = false;
 uint32_t hideNoticeUntil = 0;
+enum class DisplayPage { Tasks, Power };
+DisplayPage displayPage = DisplayPage::Tasks;
+SwipeNavigation swipe;
+struct PowerSnapshot {
+  bool valid = false, batteryPresent = false, usbPresent = false;
+  int level = -1, chargeState = 0;
+  float batteryV = 0, usbV = 0, systemV = 0;
+} powerInfo;
+uint32_t lastPowerReadAt = 0;
+
+void samplePower() {
+  lastPowerReadAt = millis();
+  auto& pmic = M5.Power.Axp2101;
+  uint8_t state[2] = {};
+  powerInfo.valid = pmic.isEnabled() && pmic.readRegister(0x00, state, 2);
+  if (!powerInfo.valid) return;
+  powerInfo.batteryPresent = state[0] & 0x08;
+  powerInfo.usbPresent = state[0] & 0x20;
+  powerInfo.chargeState = (state[1] >> 5) & 3;
+  powerInfo.level = powerInfo.batteryPresent ? pmic.getBatteryLevel() : -1;
+  if (powerInfo.level < 0 || powerInfo.level > 100) powerInfo.level = -1;
+  powerInfo.batteryV = pmic.getBatteryVoltage();
+  powerInfo.usbV = pmic.getVBUSVoltage();
+  powerInfo.systemV = pmic.getAPSVoltage();
+  // CoreS3 has no current sensor. Power_Class::getBatteryCurrent() returns a
+  // placeholder zero on this board, NOT an actual zero-current measurement.
+}
 
 Preferences prefs;
 WebServer portal(80);
@@ -79,6 +107,10 @@ void logHeap(const char* name, uint32_t caps) {
 void logMemory() {
   // USB monitoring is optional; avoid writing telemetry without a reader.
   if (!Serial) return;
+  if (millis() - lastPowerReadAt >= 1000) samplePower();
+  Serial.printf("[PWR] valid=%d battery=%d usb=%d charge_state=%d level=%d battery_v=%.3f usb_v=%.3f system_v=%.3f current=unsupported power=unsupported\n",
+                powerInfo.valid, powerInfo.batteryPresent, powerInfo.usbPresent,
+                powerInfo.chargeState, powerInfo.level, powerInfo.batteryV, powerInfo.usbV, powerInfo.systemV);
   Serial.printf("[MEM] uptime_s=%lu ble=%s tasks=%d unit=bytes\n",
                 static_cast<unsigned long>(millis() / 1000),
                 bleConnected ? "connected" : "disconnected", dashboard.bubbleCount);
@@ -312,7 +344,56 @@ void drawTaskBubble(int cx, int cy, int radius, const Dashboard::TaskBubble& tas
   d.setFont(&fonts::Font0);
 }
 
+void powerCard(int x, int y, const String& label, const String& value, uint16_t color) {
+  screen.fillRoundRect(x, y, 148, 47, 6, 0x1082);
+  screen.setFont(&fonts::efontCN_14);
+  screen.setTextSize(1);
+  screen.setTextColor(0xBDF7, 0x1082);
+  screen.setCursor(x + 8, y + 4); screen.print(label);
+  screen.setTextColor(color, 0x1082);
+  screen.setCursor(x + 8, y + 24); screen.print(value);
+  screen.setFont(&fonts::Font0);
+}
+
+String measuredVoltage(float value, bool available) {
+  return available && isfinite(value) && value > 0 && value < 10 ? String(value, 3) + " V" : "--";
+}
+
+void drawPower() {
+  screen.fillScreen(TFT_BLACK);
+  screen.setFont(&fonts::efontCN_14);
+  screen.setTextSize(1);
+  screen.fillRect(0, 0, 320, 30, 0x0B2E);
+  screen.setTextColor(TFT_WHITE, 0x0B2E);
+  screen.setCursor(10, 8); screen.print("电源详情");
+  String battery = !powerInfo.valid ? "--" : !powerInfo.batteryPresent ? "无电池" :
+                   powerInfo.level < 0 ? "--%" : String(powerInfo.level) + "%";
+  screen.setCursor(282 - screen.textWidth(battery), 8); screen.print(battery);
+  uint16_t batteryColor = powerInfo.level >= 0 && powerInfo.level <= 20 ? TFT_RED : TFT_GREEN;
+  screen.drawRoundRect(290, 9, 22, 12, 2, TFT_WHITE);
+  screen.fillRect(312, 12, 2, 6, TFT_WHITE);
+  if (powerInfo.valid && powerInfo.level >= 0) screen.fillRect(292, 11, powerInfo.level * 18 / 100, 8, batteryColor);
+  String state = !powerInfo.valid ? "电源芯片读取失败" : !powerInfo.batteryPresent ? "未检测到电池" :
+                 powerInfo.chargeState == 1 ? "正在充电" : powerInfo.chargeState == 2 ? "电池放电" :
+                 powerInfo.chargeState == 0 ? "电池待机" : "充电状态未知";
+  screen.setTextColor(TFT_WHITE, TFT_BLACK);
+  screen.setCursor(10, 36); screen.print(state);
+  screen.setCursor(194, 36); screen.print(!powerInfo.valid ? "USB --" : powerInfo.usbPresent ? "USB 已接入" : "USB 未接入");
+  powerCard(8, 57, "电池电压", measuredVoltage(powerInfo.batteryV, powerInfo.valid && powerInfo.batteryPresent), TFT_GREEN);
+  powerCard(164, 57, "USB 输入电压", measuredVoltage(powerInfo.usbV, powerInfo.valid && powerInfo.usbPresent), 0x05F6);
+  powerCard(8, 110, "实时充电电流", "未支持", 0xBDF7);
+  powerCard(164, 110, "实时充电功率", "未支持", 0xBDF7);
+  powerCard(8, 163, "系统电压 VSYS", measuredVoltage(powerInfo.systemV, powerInfo.valid), 0x05F6);
+  powerCard(164, 163, "运行时间", String(millis() / 60000) + " min", TFT_WHITE);
+  screen.setFont(&fonts::efontCN_14);
+  screen.setTextSize(1); screen.setTextColor(0xBDF7, TFT_BLACK);
+  screen.setCursor(8, 220); screen.print("无电流传感器 · 右滑返回任务");
+  screen.setFont(&fonts::Font0);
+  screen.pushSprite(0, 0);
+}
+
 void draw() {
+  if (displayPage == DisplayPage::Power) { drawPower(); return; }
   auto& d = screen;
   d.fillScreen(TFT_BLACK);
   constexpr uint16_t headerColor = 0x0B2E;
@@ -426,6 +507,7 @@ void setup() {
   screen.setColorDepth(16);
   screen.createSprite(320, 240);
   screen.setTextWrap(false);
+  samplePower();
   prefs.begin("codex-tip", false);
   startBle();
   connectWiFi();
@@ -446,6 +528,7 @@ void loop() {
     logMemory();
   }
   portal.handleClient();
+  bool pageChanged = false;
   bool touching = M5.Touch.getCount() > 0;
   if (touching && !wasTouching) {
     auto touch = M5.Touch.getDetail();
@@ -453,12 +536,27 @@ void loop() {
     pressedAt = millis();
     pressedTask = "";
     pressHandled = false;
+    swipe.begin(touch.x, touch.y, millis());
     for (const auto& hit : bubbleHits) {
+      if (displayPage != DisplayPage::Tasks) break;
       int dx = touch.x - hit.x, dy = touch.y - hit.y;
       if (hit.radius > 0 && dx * dx + dy * dy <= hit.radius * hit.radius) {
         pressedTask = hit.id;
         break;
       }
+    }
+  }
+  if (touching) {
+    auto touch = M5.Touch.getDetail();
+    auto direction = swipe.move(touch.x, touch.y, millis(), M5.Touch.getCount());
+    if (direction != SwipeNavigation::None) {
+      pressedTask = ""; pressHandled = true;
+      DisplayPage nextPage = direction == SwipeNavigation::Left ? DisplayPage::Power : DisplayPage::Tasks;
+      pageChanged = nextPage != displayPage;
+      displayPage = nextPage;
+      if (pageChanged && displayPage == DisplayPage::Power) samplePower();
+      dashboardDirty = true;
+      Serial.printf("[UI] page=%s\n", displayPage == DisplayPage::Power ? "power" : "tasks");
     }
   }
   if (touching && !pressHandled && pressedTask.length()) {
@@ -467,6 +565,7 @@ void loop() {
       pressHandled = true;
     } else if (millis() - pressedAt >= 1000) {
       pressHandled = true;
+      swipe.cancel();
       // Use the ID captured at touch-down, never a possibly reordered index.
       if (bleConnected && actionCharacteristic) {
         String command = "HIDE=" + pressedTask;
@@ -476,19 +575,26 @@ void loop() {
       }
     }
   }
+  if (!touching) swipe.cancel();
   wasTouching = touching;
+  bool powerRefresh = displayPage == DisplayPage::Power && millis() - lastPowerReadAt >= 1000;
+  if (powerRefresh) samplePower();
   bool running = false;
   for (int i = 0; i < min(4, dashboard.bubbleCount); ++i) {
     if (dashboard.bubbles[i].status == "RUN") running = true;
   }
-  bool animate = running && millis() - lastDrawAt >= 80;
-  if (dashboardDirty || millis() > nextPoll || animate) {
+  bool animate = displayPage == DisplayPage::Tasks && running && millis() - lastDrawAt >= 80;
+  if (dashboardDirty || millis() > nextPoll || animate || powerRefresh) {
     bool shouldPoll = millis() > nextPoll;
     if (shouldPoll) nextPoll = millis() + POLL_MS;
     // Wi-Fi remains an optional fallback; BLE does not require any setup.
     if (shouldPoll && (!lastBleAt || millis() - lastBleAt > 10000)) fetchDashboard();
-    draw();
-    lastDrawAt = millis();
+    // BLE keeps updating the task model on either page, but the power screen
+    // only needs a redraw once per second (or when a gesture switches pages).
+    if (displayPage == DisplayPage::Tasks || pageChanged || powerRefresh || millis() - lastDrawAt >= 1000) {
+      draw();
+      lastDrawAt = millis();
+    }
     dashboardDirty = false;
   }
   delay(20);
