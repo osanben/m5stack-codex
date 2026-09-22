@@ -7,6 +7,7 @@
 #include <NimBLEDevice.h>
 #include <esp_heap_caps.h>
 #include "SwipeNavigation.h"
+#include "PageRotation.h"
 
 namespace {
 // BLE is the primary transport and pushes updates as they happen. Keep the
@@ -26,8 +27,9 @@ uint32_t pressedAt = 0;
 int pressX = 0, pressY = 0;
 bool pressHandled = false;
 uint32_t hideNoticeUntil = 0;
-enum class DisplayPage { Tasks, Power };
+enum class DisplayPage { Tasks, OpenCode, Power };
 DisplayPage displayPage = DisplayPage::Tasks;
+PageRotation pageRotation;
 SwipeNavigation swipe;
 struct PowerSnapshot {
   bool valid = false, batteryPresent = false, usbPresent = false;
@@ -89,7 +91,13 @@ struct Dashboard {
   int bubbleCount = 0;
   int incomingBubble = -1;
   bool valid = false;
-} dashboard;
+} dashboard, openCodeDashboard;
+
+Dashboard& dashboardFor(bool openCode) { return openCode ? openCodeDashboard : dashboard; }
+
+const char* pageName() {
+  return displayPage == DisplayPage::Tasks ? "codex" : displayPage == DisplayPage::OpenCode ? "opencode" : "power";
+}
 
 void logHeap(const char* name, uint32_t caps) {
   multi_heap_info_t info = {};
@@ -114,6 +122,7 @@ void logMemory() {
   Serial.printf("[MEM] uptime_s=%lu ble=%s tasks=%d unit=bytes\n",
                 static_cast<unsigned long>(millis() / 1000),
                 bleConnected ? "connected" : "disconnected", dashboard.bubbleCount);
+  Serial.printf("[UI] page=%s codex_tasks=%d opencode_tasks=%d auto_ms=5000\n", pageName(), dashboard.bubbleCount, openCodeDashboard.bubbleCount);
   // Separate internal and external 8-bit heaps: do not double-count PSRAM.
   logHeap("INTERNAL", MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
   logHeap("PSRAM", MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
@@ -123,6 +132,7 @@ void applyBleStatus(const std::string& packet) {
   // The Mac sends a compact key=value frame. It fits in a single BLE write
   // with the negotiated MTU and deliberately carries no credentials.
   String data(packet.c_str());
+  auto& dashboard = dashboardFor(data.startsWith("AG=opencode;"));
   int start = 0;
   while (start < data.length()) {
     int end = data.indexOf(';', start);
@@ -387,13 +397,15 @@ void drawPower() {
   powerCard(164, 163, "运行时间", String(millis() / 60000) + " min", TFT_WHITE);
   screen.setFont(&fonts::efontCN_14);
   screen.setTextSize(1); screen.setTextColor(0xBDF7, TFT_BLACK);
-  screen.setCursor(8, 220); screen.print("无电流传感器 · 右滑返回任务");
+  screen.setCursor(8, 220); screen.print("左右滑切页 · 空闲5秒自动切换");
   screen.setFont(&fonts::Font0);
   screen.pushSprite(0, 0);
 }
 
 void draw() {
   if (displayPage == DisplayPage::Power) { drawPower(); return; }
+  auto& dashboard = dashboardFor(displayPage == DisplayPage::OpenCode);
+  bool isOpenCode = displayPage == DisplayPage::OpenCode;
   auto& d = screen;
   d.fillScreen(TFT_BLACK);
   constexpr uint16_t headerColor = 0x0B2E;
@@ -407,7 +419,7 @@ void draw() {
   d.setTextColor(TFT_WHITE, headerColor);
   int headerY = (headerHeight - d.fontHeight()) / 2;
   d.setCursor(12, headerY);
-  d.print(dashboard.plan);
+  d.print(isOpenCode ? "OpenCode" : dashboard.plan);
   String total = compactNumber(visibleTokens);
   d.setCursor(308 - d.textWidth(total), headerY);
   d.print(total);
@@ -415,10 +427,10 @@ void draw() {
   if (dashboard.quotaStale) percent += "*";
   d.setTextColor(dashboard.quotaStale ? 0xFD20 : TFT_WHITE, headerColor);
   d.setCursor((320 - d.textWidth(percent)) / 2, headerY);
-  d.print(percent);
+  if (!isOpenCode) d.print(percent);
   // Attach the meter directly to the toolbar, with no separate quota row.
   d.fillRect(0, headerHeight, 320, 5, 0x2104);
-  if (dashboard.primaryPercent >= 0) {
+  if (!isOpenCode && dashboard.primaryPercent >= 0) {
     d.fillRect(0, headerHeight, constrain(dashboard.primaryPercent, 0, 100) * 320 / 100, 5,
                dashboard.primaryPercent > 80 ? 0xFD20 : 0x05F6);
   }
@@ -426,7 +438,7 @@ void draw() {
   String reset = dashboard.primaryResetMinutes >= 0 ? duration(dashboard.primaryResetMinutes) : until(dashboard.primaryReset);
 
   if (count == 0) {
-    centered(118, "NO ACTIVE TASK", 0xBDF7, 2);
+    centered(118, isOpenCode ? "NO OPENCODE TASK" : "NO ACTIVE TASK", 0xBDF7, 2);
   } else {
     static const int positions[4][4][2] = {
       {{160,127},{0,0},{0,0},{0,0}},
@@ -454,6 +466,7 @@ void draw() {
   }
   // Keep all secondary information on one line, reserving y=33..219 for tasks.
   String footer = "Life " + compactNumber(dashboard.lifetimeTokens) + "  R " + reset;
+  if (isOpenCode) footer = dashboard.event.length() ? dashboard.event : "OpenCode connecting";
   if (dashboard.secondaryPercent >= 0) {
     String longReset = dashboard.secondaryResetMinutes >= 0 ? duration(dashboard.secondaryResetMinutes) : until(dashboard.secondaryReset);
     footer += "  L " + String(dashboard.secondaryPercent) + "% R2 " + longReset;
@@ -517,6 +530,7 @@ void setup() {
                 WiFi.localIP().toString().c_str(), bridgeUrl.c_str());
   configTime(0, 0, "pool.ntp.org", "time.cloudflare.com");
   draw();
+  pageRotation.interact(millis());
   logMemory();
   lastMemoryLogAt = millis();
 }
@@ -530,6 +544,7 @@ void loop() {
   portal.handleClient();
   bool pageChanged = false;
   bool touching = M5.Touch.getCount() > 0;
+  if (touching || wasTouching) pageRotation.interact(millis());
   if (touching && !wasTouching) {
     auto touch = M5.Touch.getDetail();
     pressX = touch.x; pressY = touch.y;
@@ -538,7 +553,7 @@ void loop() {
     pressHandled = false;
     swipe.begin(touch.x, touch.y, millis());
     for (const auto& hit : bubbleHits) {
-      if (displayPage != DisplayPage::Tasks) break;
+      if (displayPage == DisplayPage::Power) break;
       int dx = touch.x - hit.x, dy = touch.y - hit.y;
       if (hit.radius > 0 && dx * dx + dy * dy <= hit.radius * hit.radius) {
         pressedTask = hit.id;
@@ -551,12 +566,13 @@ void loop() {
     auto direction = swipe.move(touch.x, touch.y, millis(), M5.Touch.getCount());
     if (direction != SwipeNavigation::None) {
       pressedTask = ""; pressHandled = true;
-      DisplayPage nextPage = direction == SwipeNavigation::Left ? DisplayPage::Power : DisplayPage::Tasks;
+      pageRotation.manual(direction == SwipeNavigation::Left ? 1 : -1, millis());
+      DisplayPage nextPage = static_cast<DisplayPage>(pageRotation.page);
       pageChanged = nextPage != displayPage;
       displayPage = nextPage;
       if (pageChanged && displayPage == DisplayPage::Power) samplePower();
       dashboardDirty = true;
-      Serial.printf("[UI] page=%s\n", displayPage == DisplayPage::Power ? "power" : "tasks");
+      Serial.printf("[UI] manual page=%s\n", pageName());
     }
   }
   if (touching && !pressHandled && pressedTask.length()) {
@@ -577,13 +593,21 @@ void loop() {
   }
   if (!touching) swipe.cancel();
   wasTouching = touching;
+  if (pageRotation.tick(millis(), touching)) {
+    displayPage = static_cast<DisplayPage>(pageRotation.page);
+    pageChanged = true; dashboardDirty = true;
+    pressedTask = ""; pressHandled = true;
+    if (displayPage == DisplayPage::Power) samplePower();
+    Serial.printf("[UI] auto page=%s\n", pageName());
+  }
   bool powerRefresh = displayPage == DisplayPage::Power && millis() - lastPowerReadAt >= 1000;
   if (powerRefresh) samplePower();
   bool running = false;
-  for (int i = 0; i < min(4, dashboard.bubbleCount); ++i) {
-    if (dashboard.bubbles[i].status == "RUN") running = true;
+  const auto& visible = dashboardFor(displayPage == DisplayPage::OpenCode);
+  for (int i = 0; i < min(4, visible.bubbleCount); ++i) {
+    if (visible.bubbles[i].status == "RUN") running = true;
   }
-  bool animate = displayPage == DisplayPage::Tasks && running && millis() - lastDrawAt >= 80;
+  bool animate = displayPage != DisplayPage::Power && running && millis() - lastDrawAt >= 80;
   if (dashboardDirty || millis() > nextPoll || animate || powerRefresh) {
     bool shouldPoll = millis() > nextPoll;
     if (shouldPoll) nextPoll = millis() + POLL_MS;
@@ -591,7 +615,7 @@ void loop() {
     if (shouldPoll && (!lastBleAt || millis() - lastBleAt > 10000)) fetchDashboard();
     // BLE keeps updating the task model on either page, but the power screen
     // only needs a redraw once per second (or when a gesture switches pages).
-    if (displayPage == DisplayPage::Tasks || pageChanged || powerRefresh || millis() - lastDrawAt >= 1000) {
+    if (displayPage != DisplayPage::Power || pageChanged || powerRefresh || millis() - lastDrawAt >= 1000) {
       draw();
       lastDrawAt = millis();
     }

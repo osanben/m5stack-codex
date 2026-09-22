@@ -1,4 +1,5 @@
 #include "SwipeNavigation.h"
+#include "PageRotation.h"
 #include <cassert>
 #include <iostream>
 int main() {
@@ -22,4 +23,19 @@ int main() {
   swipe.begin(200, 100, 0); swipe.cancel();
   assert(swipe.move(100, 100, 100, 1) == SwipeNavigation::None);
   std::cout << "Swipe navigation: all tests passed\n";
+  PageRotation pages;
+  assert(!pages.tick(4999, false));
+  assert(pages.tick(5000, false) && pages.page == 1);
+  pages.manual(1, 6000); assert(pages.page == 2);
+  assert(!pages.tick(10999, false));
+  assert(pages.tick(11000, false) && pages.page == 0);
+  pages.manual(-1, 12000); assert(pages.page == 2);
+  assert(!pages.tick(20000, true));
+  pages.interact(21000); // touch release restarts the full five seconds
+  assert(!pages.tick(25999, false));
+  assert(pages.tick(26000, false) && pages.page == 0);
+  pages.interact(UINT32_MAX - 1000);
+  assert(!pages.tick(1000, false));
+  assert(pages.tick(4000, false));
+  std::cout << "Page rotation: all tests passed\n";
 }

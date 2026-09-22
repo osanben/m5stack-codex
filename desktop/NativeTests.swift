@@ -1,4 +1,5 @@
 import Foundation
+import SQLite3
 
 enum NativeTests {
     static func run() throws {
@@ -40,7 +41,7 @@ enum NativeTests {
         let frames = DeviceFrames.all(["tasks": ["items": [["id": turn, "name": "测试任务", "status": "RECONNECTING", "tokens": 123]]]])
         try check(String(decoding: frames[1], as: UTF8.self).contains("X=WAIT"), "重连编码为红色 WAIT")
         let defaults: JSONObject = ["agent": "codex", "bleEnabled": true, "completionHours": 48.0, "pushInterval": 0.25, "accountInterval": 2.0]
-        for invalid: JSONObject in [["accountInterval": 1], ["bleEnabled": 1], ["completionHours": 169], ["agent": "opencode"]] {
+        for invalid: JSONObject in [["accountInterval": 1], ["bleEnabled": 1], ["completionHours": 169], ["agent": "unregistered"]] {
             var rejected = false
             do { _ = try NativeRuntime.validate(invalid, current: defaults) } catch { rejected = true }
             try check(rejected, "拒绝无效设置 \(invalid.keys.first!)")
@@ -60,6 +61,32 @@ enum NativeTests {
         try check(reloaded.hiddenCount == 1 && reloaded.hidden(reloaded.turns["partial"] ?? [:]), "隐藏记录与任务缓存跨重启保留")
         try reloaded.restoreHidden()
         try check(NativeCodexProvider(root: root).hiddenCount == 0, "恢复隐藏记录持久化")
+        let ocRoot = root.appendingPathComponent("oc")
+        try FileManager.default.createDirectory(at: ocRoot, withIntermediateDirectories: true)
+        var db: OpaquePointer?
+        guard sqlite3_open(ocRoot.appendingPathComponent("opencode.db").path, &db) == SQLITE_OK else { throw NativeError("Test DB open failed") }
+        defer { sqlite3_close(db) }
+        func sql(_ source: String) throws {
+            guard sqlite3_exec(db, source, nil, nil, nil) == SQLITE_OK else { throw NativeError("Test SQL failed") }
+        }
+        let ms = Int(now * 1000)
+        try sql("CREATE TABLE session(id TEXT,title TEXT,directory TEXT,time_updated INTEGER,time_archived INTEGER,parent_id TEXT,tokens_input INTEGER,tokens_output INTEGER,tokens_reasoning INTEGER,tokens_cache_read INTEGER,tokens_cache_write INTEGER); CREATE TABLE message(id TEXT,session_id TEXT,time_created INTEGER,data TEXT); INSERT INTO session VALUES('ses_test','OpenCode 测试','/test',\(ms),NULL,NULL,10,20,3,4,5); INSERT INTO message VALUES('user','ses_test',\(ms-1000),'{\"role\":\"user\",\"time\":{\"created\":\(ms-1000)}}'); INSERT INTO message VALUES('assistant','ses_test',\(ms),'{\"role\":\"assistant\",\"finish\":\"stop\",\"time\":{\"created\":\(ms),\"completed\":\(ms)}}');")
+        let oc = NativeOpenCodeProvider(root: ocRoot, hiddenURL: root.appendingPathComponent("oc-hidden.json"))
+        func ocItems() -> [JSONObject] { oc.taskStatus(retention: 48 * 3600)["items"] as? [JSONObject] ?? [] }
+        try check(string(ocItems().first?["status"]) == "COMPLETED" && number(ocItems().first?["tokens"]) == 42, "OpenCode 完成状态和真实用量")
+        oc.live = ["ses_test": ["type": "busy"]]
+        try check(string(ocItems().first?["status"]) == "ACTIVE", "OpenCode 运行状态优先")
+        oc.waiting = ["ses_test"]
+        try check(string(ocItems().first?["status"]) == "WAITING", "OpenCode 待确认红色")
+        oc.waiting = []; oc.live = ["ses_test": ["type": "retry"]]
+        try check(string(ocItems().first?["status"]) == "RECONNECTING", "OpenCode 重连红色")
+        try oc.hide("oc:ses_test")
+        try check(ocItems().isEmpty, "OpenCode 独立隐藏记录")
+        try sql("INSERT INTO message VALUES('new_user','ses_test',\(ms+1000),'{\"role\":\"user\",\"time\":{\"created\":\(ms+1000)}}');")
+        try check(!ocItems().isEmpty, "OpenCode 新一轮重新显示")
+        let ocFrames = DeviceFrames.all(["tasks": ["items": ocItems()]], agent: "opencode")
+        try check(ocFrames.allSatisfy { String(decoding: $0, as: UTF8.self).hasPrefix("AG=opencode;") }, "每个蓝牙帧隔离 Agent")
+        try check(string(try NativeRuntime.validate(["agent": "opencode"], current: defaults)["agent"]) == "opencode", "桌面支持选择 OpenCode")
         print("All native tests passed")
     }
 }

@@ -3,12 +3,17 @@
 import plistlib
 import subprocess
 import platform
+import shutil
 from pathlib import Path
 
 root = Path(__file__).resolve().parents[1]
 app = root / "dist/Agent Display.app"
 contents = app / "Contents"
 (contents / "MacOS").mkdir(parents=True, exist_ok=True)
+(contents / "Resources").mkdir(parents=True, exist_ok=True)
+launcher = contents / "Resources/OpenCode.command"
+shutil.copy2(root / "desktop/OpenCode.command", launcher)
+launcher.chmod(0o755)
 with (contents / "Info.plist").open("wb") as stream:
     plistlib.dump({"CFBundleIdentifier": "com.codex.tip.desktop", "CFBundleName": "Agent Display",
                   "CFBundleExecutable": "AgentDisplay", "CFBundlePackageType": "APPL",

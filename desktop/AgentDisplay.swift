@@ -10,13 +10,13 @@ struct TaskItem: Decodable, Identifiable {
         switch status {
         case "COMPLETED": return .yellow
         case "WAITING", "RECONNECTING": return .red
-        case "INTERRUPTED": return .gray
+        case "INTERRUPTED", "UNKNOWN": return .gray
         default: return .green
         }
     }
     var label: String {
         ["ACTIVE": "运行中", "COMPLETED": "已完成", "WAITING": "等待确认",
-         "RECONNECTING": "等待网络", "INTERRUPTED": "已中断"][status] ?? status
+         "RECONNECTING": "等待网络", "INTERRUPTED": "已中断", "UNKNOWN": "状态未确认"][status] ?? status
     }
 }
 struct Preferences: Codable, Equatable {
@@ -226,15 +226,20 @@ struct ContentView: View {
                         .frame(maxWidth: .infinity, alignment: .leading).padding()
                 }
             }
-            GroupBox("OpenCode · 待接入") {
-                Text("已预留 AgentProvider 接口。本版本尚未连接 OpenCode，不会生成模拟任务或用量。")
+            GroupBox("OpenCode · 本地服务") {
+                VStack(alignment: .leading, spacing: 12) {
+                Text("通过本地服务和只读数据库获取状态。在设置中切换桌面数据源；设备同时保留两个 Agent 页面，空闲 5 秒自动轮换。独立终端会话的待确认状态可能无法获取，建议连接共享服务。")
                     .foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading).padding()
+                Button("打开 OpenCode 终端") {
+                    if let url = Bundle.main.url(forResource: "OpenCode", withExtension: "command") { NSWorkspace.shared.open(url) }
+                }.padding(.horizontal)
+                }
             }
         }
     }
     var settings: some View {
         VStack(alignment: .leading, spacing: 22) {
-            Picker("设备数据源", selection: $model.preferences.agent) {
+            Picker("桌面查看的 Agent", selection: $model.preferences.agent) {
                 ForEach(model.snapshot?.agents ?? []) { agent in Text(agent.name).tag(agent.id) }
             }
             Toggle("启用蓝牙推送", isOn: $model.preferences.bleEnabled)

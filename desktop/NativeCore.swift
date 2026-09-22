@@ -271,7 +271,7 @@ enum DeviceFrames {
     static func clean(_ value: Any?, limit: Int = 54) -> String {
         String(string(value).replacingOccurrences(of: ";", with: ",").replacingOccurrences(of: "=", with: ":").replacingOccurrences(of: "\n", with: " ").prefix(limit))
     }
-    static func all(_ status: JSONObject, now: Double = Date().timeIntervalSince1970) -> [Data] {
+    static func all(_ status: JSONObject, now: Double = Date().timeIntervalSince1970, agent: String = "codex") -> [Data] {
         let quota = object(status["quota"]), usage = object(status["usage"]), tasks = object(status["tasks"])
         let primary = object(quota["primary"]), secondary = object(quota["secondary"])
         let items = Array((tasks["items"] as? [JSONObject] ?? []).prefix(4))
@@ -285,10 +285,11 @@ enum DeviceFrames {
             ("A", n(tasks["active"])), ("B", String(items.count)), ("R", n(tasks["recent"])),
             ("Q", now - number(status["quotaUpdatedAt"]) > 90 ? "1" : "0"),
             ("T", clean(tasks["headline"])), ("E", clean(tasks["event"], limit: 42))]
-        var frames = [Data(fields.map { "\($0.0)=\($0.1)" }.joined(separator: ";").utf8)]
+        let prefix = "AG=\(agent);"
+        var frames = [Data((prefix + fields.map { "\($0.0)=\($0.1)" }.joined(separator: ";")).utf8)]
         for (index, item) in items.enumerated() {
-            let state = ["COMPLETED": "DONE", "WAITING": "WAIT", "RECONNECTING": "WAIT", "INTERRUPTED": "STOP"][string(item["status"])] ?? "RUN"
-            frames.append(Data("I=\(index);K=\(clean(item["id"]));N=\(clean(item["name"], limit: 18));V=\(n(item["tokens"]));X=\(state)".utf8))
+            let state = ["COMPLETED": "DONE", "WAITING": "WAIT", "RECONNECTING": "WAIT", "INTERRUPTED": "STOP", "UNKNOWN": "STOP"][string(item["status"])] ?? "RUN"
+            frames.append(Data("\(prefix)I=\(index);K=\(clean(item["id"]));N=\(clean(item["name"], limit: 18));V=\(n(item["tokens"]));X=\(state)".utf8))
         }
         return frames
     }

@@ -19,11 +19,15 @@ open "dist/Agent Display.app"
 - **概览**：设备连接状态、套餐、可见任务 token 合计、账户错误。
 - **任务**：与屏幕同步的 4 个任务、隐藏任务、恢复隐藏记录。
 - **设置**：蓝牙开关、完成状态保留小时数、推送间隔、账户刷新间隔，保存后立即生效。
-- **Agent**：当前接入 Codex。OpenCode 尚未实现，界面明确显示待接入。
+- **Agent**：Codex 和 OpenCode 已接入。设备同时保留两个独立任务页；设置中的 Agent 选择只影响桌面查看与恢复隐藏操作。
 
 设置保存到 `~/Library/Application Support/Agent Display/settings.json`。同目录的 `control-token` 仅允许当前用户读取，桌面控制接口同时检查 loopback 来源和 Bearer token，不开放跨域。旧 `/status` 和 BLE 数据格式保持兼容。
 
-原生扩展入口是 `desktop/NativeCore.swift` 的 `NativeAgentProvider`：提供任务状态、隐藏和恢复接口。新增 Agent 还需在 `NativeRuntime` 注册来源、设置校验和独立账户查询实现。当前只接入 Codex；OpenCode 仍为后续扩展，不会伪造其状态。
+原生扩展入口是 `desktop/NativeCore.swift` 的 `NativeAgentProvider`：提供任务状态、隐藏和恢复接口。OpenCode 实现在 `desktop/NativeOpenCode.swift`，只读查询 `~/.local/share/opencode/opencode.db` 并通过本地服务获取运行、重试及待确认状态。OpenCode 读取使用独立队列，不阻塞 Codex 或 BLE；完成任务同样保留 48 小时。蓝牙每帧携带 `AG=codex` 或 `AG=opencode`，任务列表、用量和隐藏记录彼此隔离。OpenCode 的套餐额度不伪造，也不复用 Codex 的额度。
+
+应用启动本机 `~/.opencode/bin/opencode serve --hostname 127.0.0.1 --port 4096`，使用控制令牌做 Basic Auth；不会提交提示词、批准权限或执行 Agent 任务。已存在且可访问的服务会被复用；退出应用只停止自己启动的服务。原有独立终端不会关闭。通过 Agent 页的“打开 OpenCode 终端”连接共享服务（亦可打开应用包内的 `Contents/Resources/OpenCode.command`）。连接机制见 [OpenCode Server 文档](https://dev.opencode.ai/docs/server/)。
+
+独立 TUI 的运行时权限提示不属于共享服务，数据库只能提供历史和近期活动；无法确认的状态以灰色显示，不伪装为完成。要准确显示待确认、网络重试，请使用上述共享服务入口。隐藏仅影响显示，不调用 OpenCode 删除会话接口；新一轮用户输入后重新显示。
 
 原生自测涵盖任务颜色、异步确认、Esc 中断、48 小时保留、隐藏/新一轮恢复、重连红色、设置校验和不完整日志行。`--snapshot` 可只读输出当前任务，不连接蓝牙、不修改状态文件。旧 Python 回归测试仍保留：`.venv/bin/python -m unittest discover -s bridge -p 'test_*.py'`。
 
@@ -74,7 +78,7 @@ pio run -t upload --upload-port /dev/cu.usbmodem1101
 
 ## 长按隐藏任务（蓝牙）
 
-任务页左滑进入电源详情页，右滑返回任务页。电源页右上角显示电量，页内显示正在充电 / 电池放电 / 电池待机 / 未检测到电池，以及 USB 接入状态、电池电压、USB 输入电压、VSYS 系统电压和运行时间，每秒刷新。USB 接入不等于正在充电，也不将待机误标为充满。CoreS3 没有可用的实时电流传感器，因此电流和功率明确显示“未支持”，不使用充电限流设置值或占位零值代替测量。
+设备有 Codex → OpenCode → 电源三个页面，左右滑手动循环切换。无人操作时每 5 秒自动切到下一页；触摸期间暂停，松手后重新计时 5 秒。电源页右上角显示电量，页内显示正在充电 / 电池放电 / 电池待机 / 未检测到电池，以及 USB 接入状态、电池电压、USB 输入电压、VSYS 系统电压和运行时间，每秒刷新。USB 接入不等于正在充电，也不将待机误标为充满。CoreS3 没有可用的实时电流传感器，因此电流和功率明确显示“未支持”，不使用充电限流设置值或占位零值代替测量。
 
 滑动超过 60 像素切页；多指、明显纵向移动和长按不会触发切页。滑动会取消任务长按隐藏，电源页不会发送隐藏指令。切页不影响后台 BLE 任务更新。手势逻辑可在 Mac 自测：`c++ -std=c++11 -Iinclude test/swipe_navigation.cpp -o /tmp/codex-tip-swipe-test && /tmp/codex-tip-swipe-test`。
 

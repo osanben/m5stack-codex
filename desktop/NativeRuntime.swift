@@ -8,6 +8,11 @@ final class NativeRuntime {
     let queue = DispatchQueue(label: "agent-display.engine")
     let worker = DispatchQueue(label: "agent-display.account")
     let rpc = NativeRPC()
+    let openCodeServer = OpenCodeServer()
+    let openCode = NativeOpenCodeProvider()
+    let openCodeWorker = DispatchQueue(label: "agent-display.opencode")
+    var openCodeBusy = false, lastOpenCode = 0.0
+    var openCodeStatus: JSONObject = ["plan": "OpenCode", "usage": ["lifetimeTokens": 0], "tasks": ["active": 0, "items": [], "headline": "OpenCode starting"]]
     var provider: NativeCodexProvider!
     var bluetooth: NativeBluetooth?
     var server: NativeHTTPServer?
@@ -24,7 +29,7 @@ final class NativeRuntime {
             guard current[key] != nil else { throw NativeError("未知设置：\(key)") }
             next[key] = value
         }
-        guard string(next["agent"]) == "codex" else { throw NativeError("Agent 尚未接入") }
+        guard ["codex", "opencode"].contains(string(next["agent"])) else { throw NativeError("Agent 尚未接入") }
         guard let flag = next["bleEnabled"] as? NSNumber, CFGetTypeID(flag) == CFBooleanGetTypeID() else { throw NativeError("蓝牙设置必须为布尔值") }
         for (key, range) in [("completionHours", 1.0...168.0), ("pushInterval", 0.1...10.0), ("accountInterval", 2.0...300.0)] {
             guard let value = next[key] as? NSNumber, CFGetTypeID(value) != CFBooleanGetTypeID(), value.doubleValue.isFinite, range.contains(value.doubleValue) else { throw NativeError("\(key) 超出允许范围") }
@@ -55,6 +60,9 @@ final class NativeRuntime {
                 }
             }
             provider = NativeCodexProvider()
+            openCodeWorker.async {
+                do { try self.openCodeServer.start(token: self.token) } catch { nativeLog("OpenCode startup: \(error.localizedDescription)") }
+            }
             account = readObject(provider.root.appendingPathComponent("codex-tip-status.json"))
             if account.isEmpty { account = ["plan": "Loading…", "quota": [:], "usage": ["lifetimeTokens": 0]] }
             server?.start()
@@ -66,7 +74,10 @@ final class NativeRuntime {
         bluetooth?.onState = { [weak self] state, address, error in self?.queue.async { self?.device = ["state": state, "address": address, "error": error] } }
         bluetooth?.onSent = { [weak self] in self?.queue.async { self?.sent += 1 } }
         bluetooth?.onHide = { [weak self] id in self?.queue.async {
-            do { try self?.provider.hide(id); self?.lastPush = 0 } catch { nativeLog("Hide: \(error.localizedDescription)") }
+            do {
+                if id.hasPrefix("oc:") { try self?.openCode.hide(id) } else { try self?.provider.hide(id) }
+                self?.lastPush = 0; self?.lastOpenCode = 0
+            } catch { nativeLog("Hide: \(error.localizedDescription)") }
         } }
         bluetooth?.configure(enabled: queue.sync { settings["bleEnabled"] as? Bool ?? true })
         provider.onCompletion = {
@@ -84,6 +95,7 @@ final class NativeRuntime {
     func stop() {
         queue.sync { timer?.cancel(); timer = nil }
         server?.stop(); bluetooth?.stop(); rpc.shutdown()
+        openCodeWorker.sync { openCodeServer.stop() }
         nativeLog("Native runtime stopped")
     }
     private func tick() {
@@ -93,8 +105,19 @@ final class NativeRuntime {
             status = account
             status["tasks"] = provider.taskStatus(retention: number(settings["completionHours"]) * 3600)
             status["updatedAt"] = Int(now)
-            let frames = DeviceFrames.all(status), enabled = settings["bleEnabled"] as? Bool ?? true
+            let frames = DeviceFrames.all(status, agent: "codex") + DeviceFrames.all(openCodeStatus, agent: "opencode"), enabled = settings["bleEnabled"] as? Bool ?? true
             DispatchQueue.main.async { [weak self] in self?.bluetooth?.configure(enabled: enabled); self?.bluetooth?.send(frames) }
+        }
+        if !openCodeBusy && now - lastOpenCode >= 1 {
+            openCodeBusy = true; lastOpenCode = now
+            let retention = number(settings["completionHours"]) * 3600
+            openCodeWorker.async {
+                _ = self.openCode.taskStatus(retention: retention)
+                self.openCode.refreshLive(self.openCodeServer)
+                let tasks = self.openCode.taskStatus(retention: retention)
+                let value: JSONObject = ["plan": "OpenCode", "agent": "opencode", "tasks": tasks, "quota": [:], "usage": ["lifetimeTokens": 0], "updatedAt": Int(Date().timeIntervalSince1970), "quotaUpdatedAt": Int(Date().timeIntervalSince1970)]
+                self.queue.async { self.openCodeStatus = value; self.openCodeBusy = false }
+            }
         }
         if !accountBusy && now - lastAccount >= number(settings["accountInterval"]) {
             accountBusy = true; lastAccount = now
@@ -123,9 +146,11 @@ final class NativeRuntime {
     }
     private func route(_ method: String, _ path: String, _ headers: [String: String], _ body: Data, _ local: Bool, _ reply: (Int, JSONObject) -> Void) {
         if method == "GET" && ["/", "/status"].contains(path) { reply(200, status); return }
+        if method == "GET" && path == "/status/opencode" { reply(200, openCodeStatus); return }
         guard local && headers["authorization"] == "Bearer " + token else { reply(403, ["error": "Forbidden"]); return }
         if method == "GET" && path == "/api/desktop" {
-            reply(200, ["settings": settings, "device": device, "agents": [["id": provider.id, "name": provider.name, "available": true]], "version": 2, "status": status, "hiddenCount": provider.hiddenCount,
+            let selectedOpenCode = string(settings["agent"]) == "opencode"
+            reply(200, ["settings": settings, "device": device, "agents": [["id": provider.id, "name": provider.name, "available": true], ["id": openCode.id, "name": openCode.name, "available": true]], "version": 3, "status": selectedOpenCode ? openCodeStatus : status, "statuses": ["codex": status, "opencode": openCodeStatus], "hiddenCount": selectedOpenCode ? openCode.hiddenCount : provider.hiddenCount,
                         "runtime": ["engine": "native-swift", "pid": ProcessInfo.processInfo.processIdentifier, "sentFrames": sent]])
             return
         }
@@ -136,8 +161,13 @@ final class NativeRuntime {
             case "/api/settings":
                 let next = try Self.validate(json, current: settings)
                 try writeObject(next, to: folder.appendingPathComponent("settings.json")); settings = next
-            case "/api/tasks/hide": try provider.hide(string(json["id"]))
-            case "/api/tasks/restore": try provider.restoreHidden()
+            case "/api/tasks/hide":
+                let id = string(json["id"])
+                if id.hasPrefix("oc:") { try openCode.hide(id) } else { try provider.hide(id) }
+                lastOpenCode = 0
+            case "/api/tasks/restore":
+                if string(settings["agent"]) == "opencode" { try openCode.restoreHidden() } else { try provider.restoreHidden() }
+                lastOpenCode = 0
             default: reply(404, ["error": "Not found"]); return
             }
             lastPush = 0; tick(); reply(200, ["ok": true])
