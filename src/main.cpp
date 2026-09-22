@@ -8,6 +8,7 @@
 #include <esp_heap_caps.h>
 #include "SwipeNavigation.h"
 #include "PageRotation.h"
+#include "SettingsButtons.h"
 
 namespace {
 // BLE is the primary transport and pushes updates as they happen. Keep the
@@ -27,10 +28,12 @@ uint32_t pressedAt = 0;
 int pressX = 0, pressY = 0;
 bool pressHandled = false;
 uint32_t hideNoticeUntil = 0;
-enum class DisplayPage { Tasks, OpenCode, Power };
+enum class DisplayPage { Tasks, OpenCode, Power, Settings };
 DisplayPage displayPage = DisplayPage::Tasks;
 PageRotation pageRotation;
 SwipeNavigation swipe;
+SettingsTap settingsTap;
+bool settingsSaveFailed = false;
 struct PowerSnapshot {
   bool valid = false, batteryPresent = false, usbPresent = false;
   int level = -1, chargeState = 0;
@@ -96,7 +99,8 @@ struct Dashboard {
 Dashboard& dashboardFor(bool openCode) { return openCode ? openCodeDashboard : dashboard; }
 
 const char* pageName() {
-  return displayPage == DisplayPage::Tasks ? "codex" : displayPage == DisplayPage::OpenCode ? "opencode" : "power";
+  return displayPage == DisplayPage::Tasks ? "codex" : displayPage == DisplayPage::OpenCode ? "opencode" :
+         displayPage == DisplayPage::Power ? "power" : "settings";
 }
 
 void logHeap(const char* name, uint32_t caps) {
@@ -122,7 +126,7 @@ void logMemory() {
   Serial.printf("[MEM] uptime_s=%lu ble=%s tasks=%d unit=bytes\n",
                 static_cast<unsigned long>(millis() / 1000),
                 bleConnected ? "connected" : "disconnected", dashboard.bubbleCount);
-  Serial.printf("[UI] page=%s codex_tasks=%d opencode_tasks=%d auto_ms=5000\n", pageName(), dashboard.bubbleCount, openCodeDashboard.bubbleCount);
+  Serial.printf("[UI] page=%s codex_tasks=%d opencode_tasks=%d auto_ms=5000 auto_enabled=%d\n", pageName(), dashboard.bubbleCount, openCodeDashboard.bubbleCount, pageRotation.enabled);
   // Separate internal and external 8-bit heaps: do not double-count PSRAM.
   logHeap("INTERNAL", MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
   logHeap("PSRAM", MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
@@ -402,7 +406,38 @@ void drawPower() {
   screen.pushSprite(0, 0);
 }
 
+void drawSettings() {
+  screen.fillScreen(TFT_BLACK);
+  screen.setFont(&fonts::efontCN_14);
+  screen.setTextSize(1);
+  screen.fillRect(0, 0, 320, 30, 0x0B2E);
+  screen.setTextColor(TFT_WHITE, 0x0B2E);
+  screen.setCursor(12, 8); screen.print("显示设置");
+  screen.setCursor(228, 8); screen.print(pageRotation.enabled ? "轮换开启" : "轮换暂停");
+  const String labels[] = {
+    pageRotation.enabled ? "暂停自动切页（当前 5 秒）" : "开启自动切页（每 5 秒）",
+    "查看 Codex", "查看 OpenCode", "查看电源详情"
+  };
+  for (int i = 0; i < 4; ++i) {
+    const auto& button = settingsButtons[i];
+    uint16_t background = settingsTap.active() == i ? 0x2A49 : 0x1082;
+    uint16_t accent = i == 0 ? (pageRotation.enabled ? TFT_GREEN : 0xFD20) : 0x05F6;
+    screen.fillRoundRect(button.x, button.y, button.width, button.height, 7, background);
+    screen.drawRoundRect(button.x, button.y, button.width, button.height, 7, accent);
+    screen.setTextColor(TFT_WHITE, background);
+    screen.setCursor(button.x + (button.width - screen.textWidth(labels[i])) / 2,
+                     button.y + (button.height - screen.fontHeight()) / 2);
+    screen.print(labels[i]);
+  }
+  screen.setTextColor(settingsSaveFailed ? TFT_RED : 0xBDF7, TFT_BLACK);
+  screen.setCursor(10, 219);
+  screen.print(settingsSaveFailed ? "保存失败，请重试" : "设置自动保存 · 左右滑动切页");
+  screen.setFont(&fonts::Font0);
+  screen.pushSprite(0, 0);
+}
+
 void draw() {
+  if (displayPage == DisplayPage::Settings) { drawSettings(); return; }
   if (displayPage == DisplayPage::Power) { drawPower(); return; }
   auto& dashboard = dashboardFor(displayPage == DisplayPage::OpenCode);
   bool isOpenCode = displayPage == DisplayPage::OpenCode;
@@ -522,6 +557,7 @@ void setup() {
   screen.setTextWrap(false);
   samplePower();
   prefs.begin("codex-tip", false);
+  pageRotation.setEnabled(prefs.getBool("autoRotate", true), millis());
   startBle();
   connectWiFi();
   startPortal();
@@ -552,8 +588,13 @@ void loop() {
     pressedTask = "";
     pressHandled = false;
     swipe.begin(touch.x, touch.y, millis());
+    settingsTap.cancel();
+    if (displayPage == DisplayPage::Settings) {
+      settingsTap.begin(touch.x, touch.y, millis());
+      pageChanged = true; dashboardDirty = true;
+    }
     for (const auto& hit : bubbleHits) {
-      if (displayPage == DisplayPage::Power) break;
+      if (displayPage == DisplayPage::Power || displayPage == DisplayPage::Settings) break;
       int dx = touch.x - hit.x, dy = touch.y - hit.y;
       if (hit.radius > 0 && dx * dx + dy * dy <= hit.radius * hit.radius) {
         pressedTask = hit.id;
@@ -563,8 +604,12 @@ void loop() {
   }
   if (touching) {
     auto touch = M5.Touch.getDetail();
+    int previousButton = settingsTap.active();
+    settingsTap.move(touch.x, touch.y, millis(), M5.Touch.getCount());
+    if (previousButton != settingsTap.active()) { pageChanged = true; dashboardDirty = true; }
     auto direction = swipe.move(touch.x, touch.y, millis(), M5.Touch.getCount());
     if (direction != SwipeNavigation::None) {
+      settingsTap.cancel();
       pressedTask = ""; pressHandled = true;
       pageRotation.manual(direction == SwipeNavigation::Left ? 1 : -1, millis());
       DisplayPage nextPage = static_cast<DisplayPage>(pageRotation.page);
@@ -591,6 +636,23 @@ void loop() {
       }
     }
   }
+  if (!touching && wasTouching) {
+    int button = settingsTap.release(millis());
+    if (displayPage == DisplayPage::Settings) {
+      if (button == 0) {
+        bool next = !pageRotation.enabled;
+        settingsSaveFailed = prefs.putBool("autoRotate", next) != 1;
+        if (!settingsSaveFailed) pageRotation.setEnabled(next, millis());
+        Serial.printf("[UI] auto_enabled=%d saved=%d\n", pageRotation.enabled, !settingsSaveFailed);
+      } else if (button > 0) {
+        pageRotation.select(button - 1, millis());
+        displayPage = static_cast<DisplayPage>(pageRotation.page);
+        if (displayPage == DisplayPage::Power) samplePower();
+        Serial.printf("[UI] button page=%s\n", pageName());
+      }
+      pageChanged = true; dashboardDirty = true;
+    }
+  }
   if (!touching) swipe.cancel();
   wasTouching = touching;
   if (pageRotation.tick(millis(), touching)) {
@@ -607,7 +669,8 @@ void loop() {
   for (int i = 0; i < min(4, visible.bubbleCount); ++i) {
     if (visible.bubbles[i].status == "RUN") running = true;
   }
-  bool animate = displayPage != DisplayPage::Power && running && millis() - lastDrawAt >= 80;
+  bool taskPage = displayPage == DisplayPage::Tasks || displayPage == DisplayPage::OpenCode;
+  bool animate = taskPage && running && millis() - lastDrawAt >= 80;
   if (dashboardDirty || millis() > nextPoll || animate || powerRefresh) {
     bool shouldPoll = millis() > nextPoll;
     if (shouldPoll) nextPoll = millis() + POLL_MS;
@@ -615,7 +678,7 @@ void loop() {
     if (shouldPoll && (!lastBleAt || millis() - lastBleAt > 10000)) fetchDashboard();
     // BLE keeps updating the task model on either page, but the power screen
     // only needs a redraw once per second (or when a gesture switches pages).
-    if (displayPage != DisplayPage::Power || pageChanged || powerRefresh || millis() - lastDrawAt >= 1000) {
+    if (taskPage || pageChanged || powerRefresh || millis() - lastDrawAt >= 1000) {
       draw();
       lastDrawAt = millis();
     }
