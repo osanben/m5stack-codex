@@ -360,11 +360,10 @@ void draw() {
     for (int i = 0; i < count; ++i) {
       // Radius is directly proportional to the task's token count.
       int radius = minRadius[count - 1] + (int)((maxRadius[count - 1] - minRadius[count - 1]) * ((float)dashboard.bubbles[i].tokens / maxTokens));
-      // Colour is only lifecycle state: yellow means running; green means a
-      // just-completed task held on screen briefly for confirmation.
+      // Lifecycle colours: green is running (animated), yellow is completed.
       uint16_t color = dashboard.bubbles[i].status == "WAIT" ? TFT_RED :
                        dashboard.bubbles[i].status == "STOP" ? 0xBDF7 :
-                       dashboard.bubbles[i].status == "DONE" ? 0x07E0 : 0xFFE0;
+                       dashboard.bubbles[i].status == "DONE" ? 0xFFE0 : 0x07E0;
       drawTaskBubble(positions[count - 1][i][0], positions[count - 1][i][1], radius, dashboard.bubbles[i], color);
       bubbleHits[i].x = positions[count - 1][i][0];
       bubbleHits[i].y = positions[count - 1][i][1];

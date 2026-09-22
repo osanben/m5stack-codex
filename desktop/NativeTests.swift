@@ -15,27 +15,31 @@ enum NativeTests {
         event("response_item", ["type": "function_call", "name": "functions.request_user_input_async", "call_id": "ask", "arguments": "{}"])
         event("response_item", ["type": "function_call_output", "call_id": "ask", "output": "{\"accepted\":true}"])
         event("event_msg", ["type": "task_complete", "turn_id": turn, "completed_at": now])
-        func status() -> String { string((provider.taskStatus(retention: 72 * 3600)["items"] as? [JSONObject])?.first?["status"]) }
+        func status() -> String { string((provider.taskStatus(retention: 48 * 3600)["items"] as? [JSONObject])?.first?["status"]) }
         try check(status() == "WAITING", "异步确认跨任务结束保持红色")
         event("response_item", ["type": "message", "role": "user"])
         try check(status() == "COMPLETED", "用户回复清除等待确认")
         try provider.hide(turn)
-        try check((provider.taskStatus(retention: 72 * 3600)["items"] as? [JSONObject])?.isEmpty == true, "隐藏任务")
+        try check((provider.taskStatus(retention: 48 * 3600)["items"] as? [JSONObject])?.isEmpty == true, "隐藏任务")
         event("event_msg", ["type": "task_started", "turn_id": "new", "started_at": now + 1])
         try check(status() == "ACTIVE", "同一任务新一轮重新出现")
         event("event_msg", ["type": "turn_aborted", "turn_id": "new", "completed_at": now])
         try check(status() == "INTERRUPTED", "Esc 显示中断")
         try provider.restoreHidden()
         provider.turns.removeValue(forKey: "new")
-        provider.turns[turn]?["completed_at"] = now - 71 * 3600
-        try check(status() == "COMPLETED", "完成任务保留 72 小时")
-        provider.turns[turn]?["completed_at"] = now - 73 * 3600
-        try check(status().isEmpty, "72 小时后过期")
+        provider.turns[turn]?["completed_at"] = now - 47 * 3600
+        try check(status() == "COMPLETED", "完成 47 小时仍保留")
+        provider.turns[turn]?["completed_at"] = now - 48 * 3600
+        try check(status().isEmpty, "48 小时后过期")
+        try check(TaskItem(id: "test", name: "test", tokens: 0, status: "ACTIVE").color == .green, "运行中为绿色")
+        try check(TaskItem(id: "test", name: "test", tokens: 0, status: "COMPLETED").color == .yellow, "已完成为黄色")
+        try check(TaskItem(id: "test", name: "test", tokens: 0, status: "WAITING").color == .red, "待确认仍为红色")
+        try check(TaskItem(id: "test", name: "test", tokens: 0, status: "RECONNECTING").color == .red, "重连仍为红色")
         provider.consumeRetry(target: "codex_core::responses_retry", thread: thread, body: "turn_id=\(turn): stream connection failed; waiting to retry")
         try check(provider.retrying[thread] == turn, "网络等待日志识别")
         let frames = DeviceFrames.all(["tasks": ["items": [["id": turn, "name": "测试任务", "status": "RECONNECTING", "tokens": 123]]]])
         try check(String(decoding: frames[1], as: UTF8.self).contains("X=WAIT"), "重连编码为红色 WAIT")
-        let defaults: JSONObject = ["agent": "codex", "bleEnabled": true, "completionHours": 72.0, "pushInterval": 0.25, "accountInterval": 2.0]
+        let defaults: JSONObject = ["agent": "codex", "bleEnabled": true, "completionHours": 48.0, "pushInterval": 0.25, "accountInterval": 2.0]
         for invalid: JSONObject in [["accountInterval": 1], ["bleEnabled": 1], ["completionHours": 169], ["agent": "opencode"]] {
             var rejected = false
             do { _ = try NativeRuntime.validate(invalid, current: defaults) } catch { rejected = true }
@@ -44,13 +48,13 @@ enum NativeTests {
         let partialURL = URL(fileURLWithPath: path)
         let record = try JSONSerialization.data(withJSONObject: ["type": "event_msg", "payload": ["type": "task_started", "turn_id": "partial", "started_at": now + 2]])
         try record.write(to: partialURL)
-        provider.tail(retention: 72 * 3600)
+        provider.tail(retention: 48 * 3600)
         try check(provider.turns["partial"] == nil, "不消费未完成的日志行")
         var complete = record; complete.append(10); try complete.write(to: partialURL)
-        provider.tail(retention: 72 * 3600)
+        provider.tail(retention: 48 * 3600)
         try check(provider.turns["partial"] != nil, "日志行完成后立即消费")
         let persistent = NativeCodexProvider(root: root)
-        _ = persistent.taskStatus(retention: 72 * 3600)
+        _ = persistent.taskStatus(retention: 48 * 3600)
         try persistent.hide("partial")
         let reloaded = NativeCodexProvider(root: root)
         try check(reloaded.hiddenCount == 1 && reloaded.hidden(reloaded.turns["partial"] ?? [:]), "隐藏记录与任务缓存跨重启保留")

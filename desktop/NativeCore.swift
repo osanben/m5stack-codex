@@ -92,7 +92,7 @@ final class NativeCodexProvider: NativeAgentProvider {
         self.root = root; self.persist = persist
         turns = object(readObject(root.appendingPathComponent("codex-tip-task-state.json"))["turns"]).mapValues { object($0) }
         dismissed = readObject(root.appendingPathComponent("codex-tip-dismissed.json"))
-        noticeUntil = turns.values.filter { string($0["status"]) == "completed" }.map { number($0["completed_at"]) + 72 * 3600 }.max() ?? 0
+        noticeUntil = turns.values.filter { string($0["status"]) == "completed" }.map { number($0["completed_at"]) + 48 * 3600 }.max() ?? 0
     }
     func clearPending(path: String? = nil, turn: String? = nil) {
         for (call, owner) in Array(pending) {
@@ -141,7 +141,7 @@ final class NativeCodexProvider: NativeAgentProvider {
                 state["status"] = next; state["completed_at"] = number(payload["completed_at"], now)
                 turns[turn] = state; changed = true
                 if next == "interrupted" { clearPending(turn: turn) }
-                else if ready { noticeUntil = now + 72 * 3600; onCompletion?() }
+                else if ready { noticeUntil = now + 48 * 3600; onCompletion?() }
                 turns[turn]?["announced"] = "1"
             }
         }

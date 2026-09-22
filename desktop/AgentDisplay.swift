@@ -8,10 +8,10 @@ struct TaskItem: Decodable, Identifiable {
     var status: String
     var color: Color {
         switch status {
-        case "COMPLETED": return .green
+        case "COMPLETED": return .yellow
         case "WAITING", "RECONNECTING": return .red
         case "INTERRUPTED": return .gray
-        default: return .orange
+        default: return .green
         }
     }
     var label: String {
@@ -22,7 +22,7 @@ struct TaskItem: Decodable, Identifiable {
 struct Preferences: Codable, Equatable {
     var agent = "codex"
     var bleEnabled = true
-    var completionHours = 72.0
+    var completionHours = 48.0
     var pushInterval = 0.25
     var accountInterval = 2.0
 }
@@ -238,7 +238,7 @@ struct ContentView: View {
                 ForEach(model.snapshot?.agents ?? []) { agent in Text(agent.name).tag(agent.id) }
             }
             Toggle("启用蓝牙推送", isOn: $model.preferences.bleEnabled)
-            HStack { Text("完成任务保留（小时）"); Spacer(); TextField("72", value: $model.preferences.completionHours, format: .number).frame(width: 100) }
+            HStack { Text("完成任务保留（小时）"); Spacer(); TextField("48", value: $model.preferences.completionHours, format: .number).frame(width: 100) }
             Text("范围：1–168 小时；运行中任务优先显示。").font(.caption).foregroundStyle(.secondary)
             HStack { Text("蓝牙刷新间隔（秒）"); Spacer(); TextField("0.25", value: $model.preferences.pushInterval, format: .number).frame(width: 100) }
             HStack { Text("账户刷新间隔（秒）"); Spacer(); TextField("2", value: $model.preferences.accountInterval, format: .number).frame(width: 100) }

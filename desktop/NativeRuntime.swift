@@ -12,7 +12,7 @@ final class NativeRuntime {
     var bluetooth: NativeBluetooth?
     var server: NativeHTTPServer?
     var timer: DispatchSourceTimer?
-    var settings: JSONObject = ["agent": "codex", "bleEnabled": true, "completionHours": 72.0, "pushInterval": 0.25, "accountInterval": 2.0]
+    var settings: JSONObject = ["agent": "codex", "bleEnabled": true, "completionHours": 48.0, "pushInterval": 0.25, "accountInterval": 2.0]
     var account: JSONObject = [:], status: JSONObject = [:]
     var device: JSONObject = ["state": "starting", "address": "", "error": ""]
     var token = "", accountBusy = false, started = false

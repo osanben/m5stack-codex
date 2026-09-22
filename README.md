@@ -25,7 +25,7 @@ open "dist/Agent Display.app"
 
 原生扩展入口是 `desktop/NativeCore.swift` 的 `NativeAgentProvider`：提供任务状态、隐藏和恢复接口。新增 Agent 还需在 `NativeRuntime` 注册来源、设置校验和独立账户查询实现。当前只接入 Codex；OpenCode 仍为后续扩展，不会伪造其状态。
 
-原生自测涵盖异步确认、Esc 中断、72 小时保留、隐藏/新一轮恢复、重连红色、设置校验和不完整日志行。`--snapshot` 可只读输出当前任务，不连接蓝牙、不修改状态文件。旧 Python 回归测试仍保留：`.venv/bin/python -m unittest discover -s bridge -p 'test_*.py'`。
+原生自测涵盖任务颜色、异步确认、Esc 中断、48 小时保留、隐藏/新一轮恢复、重连红色、设置校验和不完整日志行。`--snapshot` 可只读输出当前任务，不连接蓝牙、不修改状态文件。旧 Python 回归测试仍保留：`.venv/bin/python -m unittest discover -s bridge -p 'test_*.py'`。
 
 这是给已连接 **M5Stack CoreS3（ESP32-S3）** 的固件和本机只读桥接服务。屏幕实时显示：
 
@@ -34,7 +34,7 @@ open "dist/Agent Display.app"
 - 当前活跃任务、最近任务标题；
 - 已获得的限额重置次数。
 
-任务完成后会以绿色状态保留 72 小时（服务重启后仍保留）。屏幕最多显示 4 个任务，运行中的任务优先，其余位置显示最近完成的任务；同一任务开始新一轮时优先显示运行状态。
+运行中的任务为绿色并保留旋转动画，完成后以黄色状态保留 48 小时（服务重启后仍保留）。待确认和重连仍为红色，中断仍为灰色。屏幕最多显示 4 个任务，运行中的任务优先，其余位置显示最近完成的任务；同一任务开始新一轮时优先显示运行状态。
 
 账户数据来自本机 `codex app-server` 的只读 RPC：`account/rateLimits/read`、`account/usage/read`、`account/read`。任务来自本地会话日志和只读 SQLite 查询。额度查询在独立队列运行，正常缓存 2 秒，超时不会阻塞任务推送。它不向设备传输 OpenAI 密钥，也不提供“消费重置额度”的写操作。
 

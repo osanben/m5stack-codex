@@ -32,7 +32,7 @@ ACTIVE_IDLE_SECONDS = 15 * 60
 APP_SERVER_TIMEOUT_SECONDS = 15
 # Keep completed tasks visible long enough to use the dashboard as a recent
 # activity display, not only as a transient completion notification.
-COMPLETION_DISPLAY_SECONDS = 72 * 60 * 60
+COMPLETION_DISPLAY_SECONDS = 48 * 60 * 60
 INTERRUPTION_DISPLAY_SECONDS = 30 * 60
 # Lifecycle events are local files, so this is the maximum normal delay before
 # a task transition is sent to a connected display.
@@ -208,7 +208,7 @@ class TaskTracker:
         if isinstance(saved, dict) and isinstance(saved.get("turns"), dict):
             self.turns = {str(turn_id): dict(data) for turn_id, data in saved["turns"].items()
                           if isinstance(data, dict) and data.get("status") in ("active", "completed", "interrupted")}
-            # A restart must not erase the requested 72-hour green state.
+            # A restart must not erase the requested 48-hour completed state.
             # Restore the newest still-visible completion, but mark it read so
             # it does not generate another macOS notification on startup.
             restored: dict[str, tuple[int, str, dict[str, Any]]] = {}

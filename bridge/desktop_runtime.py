@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Protocol, Any
 
 APP_DIR = Path.home() / "Library/Application Support/Agent Display"
-DEFAULTS = {"agent": "codex", "bleEnabled": True, "completionHours": 72,
+DEFAULTS = {"agent": "codex", "bleEnabled": True, "completionHours": 48,
             "pushInterval": 0.25, "accountInterval": 2.0}
 
 
