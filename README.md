@@ -23,6 +23,8 @@ open "dist/Agent Display.app"
 
 设置保存到 `~/Library/Application Support/Agent Display/settings.json`。同目录的 `control-token` 仅允许当前用户读取，桌面控制接口同时检查 loopback 来源和 Bearer token，不开放跨域。旧 `/status` 和 BLE 数据格式保持兼容。
 
+Codex 任务显示名称跟随本轮最新用户问题更新：读取本地会话中的用户消息，过滤环境/AGENTS 注入内容，合并空白，桌面最多保留 64 个字符、设备沿用前 18 个字符。没有可用文本时回退原会话标题；只更新仪表盘显示，不修改 Codex 会话标题，不调用模型，任务 ID、隐藏记录、状态和去重依据不变。OpenCode 名称仍使用其会话标题。
+
 原生扩展入口是 `desktop/NativeCore.swift` 的 `NativeAgentProvider`：提供任务状态、隐藏和恢复接口。OpenCode 实现在 `desktop/NativeOpenCode.swift`，只读查询 `~/.local/share/opencode/opencode.db` 并通过本地服务获取运行、重试及待确认状态。OpenCode 读取使用独立队列，不阻塞 Codex 或 BLE；完成任务同样保留 48 小时。蓝牙每帧携带 `AG=codex` 或 `AG=opencode`，任务列表、用量和隐藏记录彼此隔离。OpenCode 的套餐额度不伪造，也不复用 Codex 的额度。
 
 应用启动本机 `~/.opencode/bin/opencode serve --hostname 127.0.0.1 --port 4096`，使用控制令牌做 Basic Auth；不会提交提示词、批准权限或执行 Agent 任务。已存在且可访问的服务会被复用；退出应用只停止自己启动的服务。原有独立终端不会关闭。通过 Agent 页的“打开 OpenCode 终端”连接共享服务（亦可打开应用包内的 `Contents/Resources/OpenCode.command`）。连接机制见 [OpenCode Server 文档](https://dev.opencode.ai/docs/server/)。

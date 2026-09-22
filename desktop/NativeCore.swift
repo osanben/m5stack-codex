@@ -78,6 +78,7 @@ final class NativeCodexProvider: NativeAgentProvider {
     var dismissed: JSONObject
     var files: [String: (offset: UInt64, size: UInt64, mtime: Double)] = [:]
     var fileTurns: [String: String] = [:]
+    var pendingNames: [String: String] = [:]
     var pending: [String: String] = [:]
     var asyncCalls: Set<String> = []
     var retrying: [String: String] = [:]
@@ -101,11 +102,39 @@ final class NativeCodexProvider: NativeAgentProvider {
             }
         }
     }
+    static func questionName(_ source: String) -> String? {
+        var text = source.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let request = text.range(of: "## My request for Codex:") { text = String(text[request.upperBound...]) }
+        if text.hasPrefix("# AGENTS.md instructions") || text.hasPrefix("You are performing a CONTEXT CHECKPOINT COMPACTION") { return nil }
+        for tag in ["environment_context", "environment_details", "turn_aborted", "user_instructions", "INSTRUCTIONS", "system_reminder", "context_summary"] {
+            text = text.replacingOccurrences(of: "(?is)<" + tag + "\\b[^>]*>.*?</" + tag + ">", with: " ", options: .regularExpression)
+        }
+        text = text.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
+        guard !text.isEmpty else { return nil }
+        return String(text.prefix(64))
+    }
+    func updateQuestion(_ source: String, path: String) {
+        guard let name = Self.questionName(source) else { return }
+        if let turn = fileTurns[path], turns[turn] != nil {
+            if string(turns[turn]?["display_name"]) != name {
+                turns[turn]?["display_name"] = name; changed = true
+            }
+            if string(turns[turn]?["status"]) == "active" { pendingNames.removeValue(forKey: path) }
+            else { pendingNames[path] = name }
+        } else { pendingNames[path] = name }
+    }
     func consume(_ event: JSONObject, path: String, mtime: Double, now: Double = Date().timeIntervalSince1970) {
         let payload = object(event["payload"]), type = string(payload["type"])
         if string(event["type"]) == "response_item" {
             let turn = fileTurns[path] ?? "", call = string(payload["call_id"])
-            if type == "message" && string(payload["role"]) == "user" { clearPending(path: path) }
+            if type == "message" && string(payload["role"]) == "user" {
+                clearPending(path: path)
+                let content = (payload["content"] as? [JSONObject] ?? []).compactMap { part -> String? in
+                    guard ["input_text", "text"].contains(string(part["type"])) else { return nil }
+                    return Self.questionName(string(part["text"]))
+                }.joined(separator: " ")
+                updateQuestion(content.isEmpty ? string(payload["content"]) : content, path: path)
+            }
             if ["function_call", "custom_tool_call"].contains(type) && !call.isEmpty && string(turns[turn]?["status"]) == "active" {
                 let name = string(payload["name"]).split(separator: ".").last.map(String.init) ?? ""
                 let arguments = string(payload["arguments"], string(payload["input"]))
@@ -124,6 +153,7 @@ final class NativeCodexProvider: NativeAgentProvider {
             return
         }
         guard string(event["type"]) == "event_msg" else { return }
+        if type == "user_message" { updateQuestion(string(payload["message"]), path: path); return }
         let turn = string(payload["turn_id"])
         guard !turn.isEmpty else { return }
         if type == "task_started" {
@@ -132,6 +162,7 @@ final class NativeCodexProvider: NativeAgentProvider {
             let inferred = match(#"([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})\.jsonl$"#, path, group: 1) ?? ""
             turns[turn] = ["status": "active", "thread_id": string(payload["thread_id"], inferred),
                            "rollout_path": path, "started_at": number(payload["started_at"], now), "last_activity": mtime]
+            if let name = pendingNames.removeValue(forKey: path) { turns[turn]?["display_name"] = name }
             changed = true
         } else if ["task_complete", "task_failed", "task_interrupted", "turn_aborted"].contains(type) {
             var state = turns[turn] ?? ["thread_id": string(payload["thread_id"]), "started_at": number(payload["started_at"], now)]
@@ -243,8 +274,10 @@ final class NativeCodexProvider: NativeAgentProvider {
         for state in active + inactive {
             let thread = string(state["thread_id"])
             let detail = db?.rows("SELECT COALESCE(name,title,preview) AS name,tokens_used,cwd FROM threads WHERE id=?", [thread]).first ?? [:]
-            let name = string(detail["name"], "Codex task")
-            let identity = name + "\u{0}" + string(detail["cwd"])
+            let originalName = string(detail["name"], "Codex task")
+            let name = string(state["display_name"], originalName)
+            // Display text may change mid-turn; dedup identity must not.
+            let identity = originalName + "\u{0}" + string(detail["cwd"])
             if ["ACTIVE", "WAITING", "RECONNECTING"].contains(string(state["displayStatus"])) {
                 if seen.contains(identity) { continue }
                 seen.insert(identity); activeCount += 1
